@@ -103,6 +103,17 @@ async def check_source(
     return VerifyResult(fact_id=fact.id, source_ok=False, note="quote not found on source page")
 
 
+def needs_support_check(fact: Fact) -> bool:
+    """Human-written quotes get the model check. Record facts from an API (RDAP date, crt.sh
+    timestamp) carry a machine value as quote; their sentence is generated from it in code."""
+    if not fact.quote:
+        return False
+    is_api_record = fact.source_kind == SourceKind.RECORD and host_matches(
+        host_of(fact.source_url), API_HOSTS
+    )
+    return not is_api_record
+
+
 async def check_support(llm: StructuredLLM, facts: list[Fact]) -> dict[str, bool]:
     items = [{"id": f.id, "sentence": f.statement, "quote": f.quote} for f in facts if f.quote]
     if not items:
@@ -126,7 +137,7 @@ async def _verify_batch(
 ) -> dict[str, VerifyResult]:
     checks = await asyncio.gather(*(check_source(f, fetcher, snippets, settings) for f in facts))
     results = {r.fact_id: r for r in checks}
-    to_judge = [f for f in facts if results[f.id].source_ok and f.quote]
+    to_judge = [f for f in facts if results[f.id].source_ok and needs_support_check(f)]
     try:
         support = await check_support(llm, to_judge)
     except LLMError as exc:

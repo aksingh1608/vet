@@ -58,13 +58,17 @@ FALLBACK_PATHS: dict[str, tuple[str, ...]] = {
 _COPYRIGHT = re.compile(
     r"(?:©|&copy;|\(c\)|copyright)\s*(?:\d{4}\s*[-–]\s*)?((?:19|20)\d{2})", re.I
 )
+# Text that tells an AI or evaluator what to do or conclude. Mentions of AI products or
+# categories ("AI Assistants", "our AI agent drafts invoices") must not match.
 _INJECTION = re.compile(
     r"ignore (?:all |any )?(?:previous|prior|above|earlier) instructions"
     r"|(?:if|when) you are an? (?:ai|llm|large language model|language model|assistant|agent|bot)\b"
-    r"|(?:note|message|instructions?) (?:to|for) (?:any |all )?(?:ai|llms?|language models?"
-    r"|assistants?|agents?|evaluators?)\b"
-    r"|\b(?:ai|llm) (?:agents?|assistants?|evaluators?|models?)\b[^.]{0,80}"
-    r"\b(?:should|must|always|recommend|rate|trust|verdict|score)\b",
+    r"|\b(?:note|message|instructions?) (?:to|for) (?:any |all )?(?:ai|llms?|language models?"
+    r"|ai (?:assistants?|agents?|evaluators?)|evaluators?|reviewers? using ai)\b"
+    r"|\b(?:ai|llm|language model)s? (?:evaluators?|reviewers?|auditors?|assessors?)\b"
+    r"|\b(?:rate|score|classify|mark|consider|label) (?:this|the|our) (?:vendor|company|product"
+    r"|site|website|business) as (?:fully |highly |very )?(?:trust\w*|safe|legit\w*|real"
+    r"|reliable|reputable)",
     re.I,
 )
 
@@ -310,7 +314,7 @@ async def read_site(ctx: Context) -> SiteReport:
         register_number=out.register_number,
         country=out.country.upper()[:2],
     )
-    errors = [f"{p.kind} {p.url}: {p.error}" for p in pages if p.error]
+    errors = [f"{p.kind} {p.url}: {p.error}" for p in pages if p.error and not p.guessed]
     logger.info(
         "site %s: %d pages, %d claims (%d dropped)", ctx.domain, len(readable), len(claims), dropped
     )

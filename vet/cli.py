@@ -72,6 +72,9 @@ def main(
     if not root.handlers:
         root.addHandler(RichHandler(console=console, show_path=False))
     root.setLevel(logging.DEBUG if verbose else logging.INFO)
+    # Per-request HTTP logs go to the trace, not the console.
+    for noisy in ("httpx", "httpx2", "httpcore", "httpcore2", "anthropic", "trafilatura"):
+        logging.getLogger(noisy).setLevel(logging.DEBUG if verbose else logging.WARNING)
 
 
 @app.command()

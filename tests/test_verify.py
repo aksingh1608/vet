@@ -94,3 +94,14 @@ async def test_at_most_seven_reasons(router_fetcher) -> None:
         )
     assert len(reasons) == 7
     assert [r.fact_id for r in reasons] == [f"g{i}" for i in range(7)]
+
+
+def test_api_record_facts_skip_the_model_check() -> None:
+    from vet.verify import needs_support_check
+
+    rdap = fact("r", "https://rdap.org/domain/x.example", "2008-05-14T10:00:00Z", SourceKind.RECORD)
+    review = fact("i", "https://review.example/a", "212 reviews")
+    nd = fact("n", ND, "Amtsgericht München HRB 123456", SourceKind.RECORD)
+    assert not needs_support_check(rdap)
+    assert needs_support_check(review)
+    assert needs_support_check(nd)  # human-written register text still gets checked
