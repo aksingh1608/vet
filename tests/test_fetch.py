@@ -72,10 +72,15 @@ async def test_fetcher_spaces_requests_to_same_host(make_fetcher) -> None:
     assert all(g >= 1.0 for g in gaps), gaps
 
 
-def test_default_intervals_keep_archive_hosts_at_one_per_second() -> None:
+def test_default_source_policies() -> None:
     s = Settings()
-    assert s.host_intervals["web.archive.org"] >= 1.0
-    assert s.host_intervals["crt.sh"] >= 1.0
+    assert 60 / s.host_policies["web.archive.org"].min_interval_s <= 20
+    crt = s.host_policies["crt.sh"]
+    assert 60 / crt.min_interval_s <= 4
+    assert crt.max_retries == 0
+    assert crt.timeout_s == 20.0
+    assert 60 / s.host_policies["api.company-information.service.gov.uk"].min_interval_s <= 100
+    assert s.host_policies["haveibeenpwned.com"].min_interval_s >= 2.0
     assert s.default_host_interval_s >= 1.0
 
 
@@ -221,3 +226,56 @@ async def test_default_client_identity_and_timeout(settings: Settings) -> None:
         assert client.headers["User-Agent"].startswith("vet/")
         assert client.timeout.read == 15.0
         assert client.timeout.connect == settings.connect_timeout_s
+
+
+# ---- per-host policy and blocked hosts ----------------------------------------------
+
+
+async def test_crtsh_gets_one_attempt_and_its_own_timeout(make_fetcher) -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        raise httpx.ReadTimeout("slow", request=request)
+
+    async with make_fetcher(Recorder(handler)) as f:
+        with pytest.raises(FetchError):
+            await f.get_json("https://crt.sh/?q=example.com&output=json")
+    assert len(seen) == 1
+    assert seen[0].extensions["timeout"]["read"] == 20.0
+
+
+@pytest.mark.parametrize(
+    "url",
+    ["https://www.northdata.de/Foo%20GmbH", "https://northdata.com/x", "https://a.northdata.de/"],
+)
+async def test_northdata_is_never_fetched(make_fetcher, url: str) -> None:
+    from vet.fetch import BlockedHost
+
+    rec = Recorder(lambda r: httpx.Response(200, text="should not be reached"))
+    async with make_fetcher(rec) as f:
+        with pytest.raises(BlockedHost):
+            await f.get_text(url)
+        with pytest.raises(BlockedHost):
+            await f.get_json(url)
+    assert rec.requests == []
+
+
+async def test_cached_lookup_never_touches_network(make_fetcher) -> None:
+    rec = Recorder(site({"/p": (200, "hello")}))
+    async with make_fetcher(rec) as f:
+        assert await f.cached("https://vendor.example/p") is None
+        await f.get_text("https://vendor.example/p")
+        n = len(rec.requests)
+        hit = await f.cached("https://vendor.example/p")
+    assert hit is not None and hit.text == "hello"
+    assert len(rec.requests) == n
+
+
+async def test_post_api_reports_cache_hits(make_fetcher) -> None:
+    rec = Recorder(lambda r: httpx.Response(200, json={"results": []}))
+    async with make_fetcher(rec) as f:
+        first = await f.post_api("https://api.example/search", {"query": "x"})
+        second = await f.post_api("https://api.example/search", {"query": "x"})
+    assert not first.from_cache
+    assert second.from_cache

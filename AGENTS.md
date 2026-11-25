@@ -40,6 +40,16 @@ since the spec was written.
    nothing" is never a reason; it may only lower confidence.
 4. Verdict labels are internal enums; mapping to the organiser's labels happens only in the output writer.
 
+## Source rules (approved 2026-11-25, enforced in `config.py` / `fetch.py`)
+| Source | Limit | Notes |
+|---|---|---|
+| Wayback CDX (`web.archive.org`) | ≤ 20 req/min | |
+| crt.sh | ≤ 4 req/min, 1 attempt, 20 s timeout | Optional: on failure `age` continues with RDAP + Wayback |
+| Companies House API | ≤ 100 req/min | Key in Basic auth header only |
+| Have I Been Pwned | 1 req / 2 s, descriptive User-Agent | Only `GET https://haveibeenpwned.com/api/v3/breaches?domain={domain}`, no key. Never call `breacheddomain` or `breachedaccount`. The HTML report must credit "Breach data: Have I Been Pwned" linking to haveibeenpwned.com |
+| North Data | never fetched | Found only via Tavily `include_domains`; the Tavily result content is the quote and its URL the source. The verifier accepts the cached Tavily snippet as page content for these domains only |
+| Tavily | `search_depth: basic` | `advanced` only with `VET_TAVILY_ADVANCED=true`. Every response is cached (key = query + parameters), so reruns cost 0 credits. Credits per product are logged in the trace |
+
 ## Git workflow
 - Never commit to `main`. One branch per feature, merge via pull request.
 - **Check code with Norma before committing.** If the Norma MCP server is connected, run `live_check` on
