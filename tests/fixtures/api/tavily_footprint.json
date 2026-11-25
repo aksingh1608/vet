@@ -1,0 +1,13 @@
+{"query": "x", "results": [
+ {"url": "https://www.g2.com/products/ledgerly/reviews", "title": "Ledgerly Reviews 2026 | G2",
+  "content": "Ledgerly has 212 reviews on G2 with an average rating of 4.6 out of 5 stars. Users praise the fast invoice approval flow.",
+  "score": 0.9},
+ {"url": "https://ledgerly.example/blog/launch", "title": "Our launch",
+  "content": "We are proud to announce Ledgerly 5.0 with AI invoicing.", "score": 0.8},
+ {"url": "https://www.prnewswire.com/ledgerly-raises", "title": "Ledgerly raises Series B",
+  "content": "MUNICH, Ledgerly today announced a Series B round of 30 million euros.", "score": 0.7},
+ {"url": "https://news.example.org/ledger-farms", "title": "Ledgerly Farms opens new barn",
+  "content": "Ledgerly Farms, a dairy in Wisconsin, opened a new barn this week.", "score": 0.6},
+ {"url": "https://www.heise.de/news/ledgerly-datenleck", "title": "Datenleck bei Ledgerly",
+  "content": "Bei dem Münchner Rechnungsanbieter Ledgerly sind 2024 Kundendaten von 12.000 Firmen abgeflossen, berichtet heise online.",
+  "score": 0.85}]}
