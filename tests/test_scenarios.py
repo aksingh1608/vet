@@ -313,3 +313,93 @@ async def test_mid_age_vendor_with_only_weak_sources_is_not_trusted(name: str) -
     assert rules.scores["strong_sources"] == 0.0 and Trust.TRUST not in rules.allowed_trust
     result = await judge(JUDGES[name], [], facts)
     assert result.trust != Trust.TRUST
+
+
+# ---- labels decided in code: the same facts always give the same labels ------------------------
+
+
+def linear_like(strong_sites: int) -> list[Fact]:
+    """8.5 years of records; strong positives on `strong_sites` sites plus normal ones."""
+    sites = STRONG_THREE[:strong_sites]
+    normal = [
+        ("https://feedvote.app/blog/mid", {"source_type": "blog", "topic": "news"}),
+        ("https://www.eleken.co/blog-posts/mid", {"source_type": "blog", "topic": "other"}),
+    ]
+    return mid_age(8.5, [*sites, *normal])
+
+
+def smollaunch_like() -> list[Fact]:
+    """About a year old, real but tiny: a social post and a launch-site listing, nothing
+    strong, no red flags."""
+    facts = age_records("smol.example", NOW - timedelta(days=370), (Polarity.NEGATIVE, 0.3))
+    facts += [
+        fact("footprint-0", "footprint", Axis.REAL_ALIVE, Polarity.POSITIVE, 0.3,
+             source_kind=SourceKind.INDEPENDENT, source_type="social",
+             source_url="https://www.instagram.com/p/smol"),
+        fact("footprint-1", "footprint", Axis.REAL_ALIVE, Polarity.POSITIVE, 0.2,
+             source_kind=SourceKind.INDEPENDENT, topic="directory", is_filler=True,
+             source_url="https://www.producthunt.com/products/smol"),
+    ]  # fmt: skip
+    return facts
+
+
+CASES = {
+    # no negatives: the trust score (+1.6) is far above the threshold either way; the mid-age
+    # tier only matters when negatives pull the score down
+    "linear-like, 2 strong sites": (linear_like(2), (RealAlive.YES, Trust.TRUST)),
+    "linear-like, 3 strong sites": (linear_like(3), (RealAlive.YES, Trust.TRUST)),
+    # weak evidence still counts for real_alive (+0.5 against one young-age signal of 0.3),
+    # never for trust; the young-vendor cap keeps trust at caution
+    "smollaunch-like": (smollaunch_like(), (RealAlive.YES, Trust.CAUTION)),
+}
+
+
+@pytest.mark.parametrize("case", CASES)
+async def test_same_facts_give_the_same_labels_whatever_the_model_says(case: str) -> None:
+    facts, expected = CASES[case]
+    labels = set()
+    for _ in range(3):  # repeated calls
+        for llm in JUDGES.values():  # rules only, optimistic model, pessimistic model
+            result = await judge(llm, [], facts)
+            labels.add((result.real_alive, result.trust))
+    assert labels == {expected}
+
+
+@pytest.mark.parametrize("scenario", ["hollow", "tiny", "dead"])
+async def test_existing_scenarios_are_model_independent(scenario: str) -> None:
+    claims, facts = {"hollow": hollow, "tiny": tiny, "dead": dead}[scenario]()
+    checks, new = check_claims(claims, facts, f"{scenario}.example", {scenario}, NOW)
+    labels = {
+        (r.real_alive, r.trust)
+        for r in [await judge(llm, claims, facts + new, checks) for llm in JUDGES.values()]
+    }
+    assert len(labels) == 1
+
+
+def test_a_score_exactly_at_a_threshold_gets_the_more_cautious_label() -> None:
+    from vet.config import LabelThresholds
+    from vet.judge import code_labels
+
+    facts = mid_age(6, [])  # age records only: real_alive score = 0.4 (one signal)
+    rules = apply_rules(facts, today=NOW)
+    at_yes = LabelThresholds(real_alive_yes_above=rules.scores["real_alive_pos"])
+    ra, _, note = code_labels(rules, at_yes)
+    assert ra == RealAlive.UNCLEAR and "real_alive score +0.40 -> unclear" in note
+    just_below = LabelThresholds(real_alive_yes_above=rules.scores["real_alive_pos"] - 0.01)
+    assert code_labels(rules, just_below)[0] == RealAlive.YES
+
+    trust_rules = apply_rules(mid_age(6, STRONG_THREE[:1]), today=NOW)  # trust score 0.4
+    at_trust = LabelThresholds(trust_above=trust_rules.scores["trust_pos"])
+    assert code_labels(trust_rules, at_trust)[1] != Trust.TRUST
+
+
+async def test_after_verification_failed_positives_no_longer_count() -> None:
+    from vet.judge import relabel_after_verification
+
+    facts = mid_age(6, STRONG_THREE)
+    first = await judge(JUDGES["pessimistic LLM"], [], facts)
+    assert first.trust == Trust.TRUST  # mid-age tier, whatever the model says
+    failed = {"footprint-0", "footprint-1", "footprint-2"}  # none of the three pages verified
+    after = relabel_after_verification(first, facts, failed)
+    assert after.trust == Trust.CAUTION  # no trust evidence left
+    assert any("unverified fact(s) not counted" in n for n in after.notes)

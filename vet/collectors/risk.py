@@ -220,7 +220,7 @@ def news_facts_from(
         kind = "vendor" if own else source_type_for(item.url, item.source_type)
         corroborated = own or kind in REPUTABLE_TYPES or len(sites.get(item.event, set())) >= 2
         severity = min(max(item.severity, 0.0), 1.0)
-        weight = max(base, severity) if polarity == Polarity.NEGATIVE else base
+        weight = base  # fixed per event type in code, never the model's severity
         hard = may_be_hard and corroborated and severity >= HARD_SEVERITY
         topic = item.event
         year = _year(item.date)

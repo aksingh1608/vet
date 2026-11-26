@@ -24,8 +24,14 @@
    * weak evidence (launch sites, link directories, paid PR wires, social media, activity the
      vendor controls) never blocks the hollow pattern and never raises trust on its own: it
      is left out of the independent sources and of the trust score.
-2. LLM judge: picks labels within the allowed set and ranks fact ids (reasons and findings).
-   Reasons and findings are built in code from verified facts, so no source can be invented.
+2. Labels are decided in code (``code_labels``): a score per question, the sum of weight x
+   polarity over the scored facts (age records once; minor review negatives and site looks
+   left out), mapped to a label by fixed thresholds (config ``LabelThresholds``; a score at a
+   threshold gets the more cautious label), then moved to the nearest label the rules above
+   allow. After verification the labels are computed again without the facts that failed.
+3. LLM judge: writes the summary and ranks fact ids (reasons and findings). It cannot change
+   the labels: a different label from the model is logged as a warning and ignored. Reasons
+   and findings are built in code from verified facts, so no source can be invented.
 """
 
 import json
@@ -35,6 +41,7 @@ from datetime import UTC, datetime
 
 from pydantic import BaseModel, Field
 
+from vet.config import LabelThresholds
 from vet.llm import LLMError, StructuredLLM, load_prompt, untrusted
 from vet.schemas import Axis, Claim, ClaimCheck, Fact, Polarity, RealAlive, SourceKind, Trust
 from vet.sources import evidence_class
@@ -202,9 +209,9 @@ def apply_rules(
     breach_recent_years: int = DEFAULT_BREACH_RECENT_YEARS,
     failed: frozenset[str] = frozenset(),
 ) -> RuleOutcome:
-    """``failed``: negative facts whose source did not verify. They no longer count against
-    the vendor (hard flags, breaches, real negatives, scores), but a breach notice among them
-    still counts as disclosure."""
+    """``failed``: facts whose source did not verify. They no longer count, for or against the
+    vendor (hard flags, breaches, real negatives, sources, scores), but a breach notice among
+    them still counts as disclosure."""
     notes: list[str] = []
     # Rule 1: vendor-sourced facts never count as positive evidence.
     eligible = [
@@ -214,10 +221,10 @@ def apply_rules(
     ]
     if len(eligible) < len(facts):
         notes.append(f"ignored {len(facts) - len(eligible)} vendor-sourced positive facts")
-    # Negative facts that failed verification are not held against the vendor.
-    dropped = [f for f in eligible if f.id in failed and f.polarity == Polarity.NEGATIVE]
+    # Facts that failed verification count neither for nor against the vendor.
+    dropped = [f for f in eligible if f.id in failed]
     if dropped:
-        notes.append(f"{len(dropped)} unverified negative fact(s) not held against the vendor")
+        notes.append(f"{len(dropped)} unverified fact(s) not counted")
     counted = [f for f in eligible if f not in dropped]
     # Rule 4: looks facts only break ties, so they do not enter the scores. Mixed review
     # scores are a minor negative and do not enter them either.
@@ -266,12 +273,12 @@ def apply_rules(
         notes.append("trust=trust not allowed: no record/independent trust evidence")
 
     # Trust floor: a long, consistent history plus independent evidence and no hard flags.
-    years = history_years(eligible, today)
-    sources = independent_positive_sources(eligible)
+    years = history_years(counted, today)
+    sources = independent_positive_sources(counted)
     old_ids = {f.id for f in breaches.old_disclosed}
     real_negatives = [f for f in counted if is_real_negative(f) and f.id not in old_ids]
     contradicted = any(f.topic == "contradicted_claim" for f in counted)
-    strong = strong_positive_sources(eligible)
+    strong = strong_positive_sources(counted)
     floor_met = (
         not hard
         and years > TRUST_FLOOR_HISTORY_YEARS
@@ -316,7 +323,7 @@ def apply_rules(
             notes.append(f"{basis}: no hard flags or real negatives -> trust")
 
     # Red-flag gates, applied last so they override the softer rules above.
-    hollow = is_hollow(eligible, years, sources)
+    hollow = is_hollow(counted, years, sources)
     shutdown = [f for f in hard_ra if f.topic == "discontinued"]
     if hollow:
         allowed_ra, allowed_tr = [RealAlive.NO], [Trust.DO_NOT_TRUST]
@@ -392,24 +399,36 @@ def finding_candidates(facts: list[Fact]) -> list[str]:
     return [f.id for f in rank_facts(facts) if is_forced(f) or is_real_negative(f) or is_breach(f)]
 
 
-def rules_only_labels(rules: RuleOutcome) -> tuple[RealAlive, Trust]:
+def code_labels(
+    rules: RuleOutcome, thresholds: LabelThresholds | None = None
+) -> tuple[RealAlive, Trust, str]:
+    """The labels, decided in code: score -> label by threshold (a score at a threshold gets
+    the more cautious label), then the nearest label the rules allow. Returns a note too."""
+    t = thresholds or LabelThresholds()
     s = rules.scores
-    ra = (
-        RealAlive.YES
-        if s["real_alive_pos"] > s["real_alive_neg"]
-        else (
-            RealAlive.NO if s["real_alive_neg"] > s["real_alive_pos"] + 0.5 else RealAlive.UNCLEAR
-        )
+    ra_score = round(s["real_alive_pos"] - s["real_alive_neg"], 3)
+    tr_score = round(s["trust_pos"] - s["trust_neg"], 3)
+    if ra_score > t.real_alive_yes_above:
+        ra_raw = RealAlive.YES
+    elif ra_score <= t.real_alive_no_at_or_below:
+        ra_raw = RealAlive.NO
+    else:
+        ra_raw = RealAlive.UNCLEAR
+    if tr_score > t.trust_above:
+        tr_raw = Trust.TRUST
+    elif tr_score <= t.do_not_trust_at_or_below:
+        tr_raw = Trust.DO_NOT_TRUST
+    else:
+        tr_raw = Trust.CAUTION
+    ra = clamp(ra_raw, rules.allowed_real_alive, REAL_ALIVE_ORDER)
+    tr = clamp(tr_raw, rules.allowed_trust, TRUST_ORDER)
+    note = (
+        f"labels from code: real_alive score {ra_score:+.2f} -> {ra_raw.value}"
+        + (f" (rules: {ra.value})" if ra != ra_raw else "")
+        + f", trust score {tr_score:+.2f} -> {tr_raw.value}"
+        + (f" (rules: {tr.value})" if tr != tr_raw else "")
     )
-    tr = (
-        Trust.TRUST
-        if s["trust_pos"] > s["trust_neg"] + 0.3
-        else (Trust.DO_NOT_TRUST if s["trust_neg"] > s["trust_pos"] + 0.5 else Trust.CAUTION)
-    )
-    return (
-        clamp(ra, rules.allowed_real_alive, REAL_ALIVE_ORDER),
-        clamp(tr, rules.allowed_trust, TRUST_ORDER),
-    )
+    return ra, tr, note
 
 
 class JudgeOut(BaseModel):
@@ -474,8 +493,10 @@ async def judge(
     facts: list[Fact],
     checks: list[ClaimCheck] | None = None,
     breach_recent_years: int = DEFAULT_BREACH_RECENT_YEARS,
+    thresholds: LabelThresholds | None = None,
 ) -> Judgement:
     rules = apply_rules(facts, breach_recent_years=breach_recent_years)
+    ra, tr, label_note = code_labels(rules, thresholds)
     only = rules.finding_only
     ranked = [f.id for f in rank_facts(rules.eligible) if f.id not in only]
     must_find = finding_candidates(rules.eligible)
@@ -488,8 +509,7 @@ async def judge(
             step="judge",
         )
     except LLMError as exc:
-        logger.warning("LLM judge failed (%s); using rules-only verdict", exc)
-        ra, tr = rules_only_labels(rules)
+        logger.warning("LLM judge failed (%s); labels from code, no summary", exc)
         return Judgement(
             real_alive=ra,
             trust=tr,
@@ -498,7 +518,7 @@ async def judge(
             ranked_fact_ids=ranked,
             finding_fact_ids=must_find[: MAX_FINDINGS * 2],
             used_llm=False,
-            notes=rules.notes,
+            notes=[*rules.notes, label_note],
             finding_only_ids=sorted(only),
         )
 
@@ -508,13 +528,21 @@ async def judge(
         if fid in allowed_ids and fid not in picked and fid not in only:
             picked.append(fid)
     dropped = len(out.reason_fact_ids) - len(picked)
-    notes = list(rules.notes)
+    notes = [*rules.notes, label_note]
     if dropped:
         notes.append(f"judge cited {dropped} unknown or ineligible fact id(s); ignored")
-    ra = clamp(out.real_alive, rules.allowed_real_alive, REAL_ALIVE_ORDER)
-    tr = clamp(out.trust, rules.allowed_trust, TRUST_ORDER)
-    if ra != out.real_alive or tr != out.trust:
-        notes.append(f"judge labels clamped by rules: {out.real_alive}->{ra}, {out.trust}->{tr}")
+    if (out.real_alive, out.trust) != (ra, tr):
+        logger.warning(
+            "LLM judge proposed %s/%s; the code's labels %s/%s are kept",
+            out.real_alive.value,
+            out.trust.value,
+            ra.value,
+            tr.value,
+        )
+        notes.append(
+            f"judge proposed {out.real_alive.value}/{out.trust.value}; ignored, labels are "
+            "decided in code"
+        )
     # Forced facts (contradictions) first, then the judge's order, then the deterministic
     # ranking as backups for the verifier.
     forced = [fid for fid in ranked if fid in {f.id for f in rules.eligible if is_forced(f)}]
@@ -540,17 +568,18 @@ def relabel_after_verification(
     facts: list[Fact],
     failed: set[str],
     breach_recent_years: int = DEFAULT_BREACH_RECENT_YEARS,
+    thresholds: LabelThresholds | None = None,
 ) -> Judgement:
-    """Re-apply the rules without the negative facts that failed verification and move the
-    labels to the nearest label the rules now allow."""
-    negatives = {f.id for f in facts if f.id in failed and f.polarity == Polarity.NEGATIVE}
-    if not negatives:
+    """The final labels: the rules and the code's scores again, without the facts that failed
+    verification (either polarity)."""
+    dropped = frozenset(f.id for f in facts if f.id in failed)
+    if not dropped:
         return judgement
-    rules = apply_rules(facts, breach_recent_years=breach_recent_years, failed=frozenset(negatives))
-    ra = clamp(judgement.real_alive, rules.allowed_real_alive, REAL_ALIVE_ORDER)
-    tr = clamp(judgement.trust, rules.allowed_trust, TRUST_ORDER)
+    rules = apply_rules(facts, breach_recent_years=breach_recent_years, failed=dropped)
+    ra, tr, label_note = code_labels(rules, thresholds)
     notes = [*judgement.notes, *[n for n in rules.notes if "unverified" in n]]
     if (ra, tr) != (judgement.real_alive, judgement.trust):
+        notes.append(label_note)
         notes.append(f"after verification: {judgement.real_alive}->{ra}, {judgement.trust}->{tr}")
     return judgement.model_copy(
         update={

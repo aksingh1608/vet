@@ -49,6 +49,9 @@ MAX_RESULTS_TO_CLASSIFY = 18
 SNIPPET_CHARS = 1200
 # A mixed or poor review score is a minor negative: it never moves the verdict alone.
 MINOR_REVIEW_WEIGHT = 0.15
+# Weights are set in code by evidence class, never taken from the model, so the same source
+# always weighs the same.
+CLASS_WEIGHTS: dict[str, float] = {"strong": 0.5, "normal": 0.3, "weak": 0.1}
 MIN_STRONG_SOURCES = 3  # fewer strong sites than this after the base searches: search more
 TARGETED_REVIEW_SITES = ["g2.com", "capterra.com", "trustpilot.com", "omr.com"]
 TOPICS = ("reviews", "customer", "news", "directory", "marketplace", "jobs", "partner", "other")
@@ -130,10 +133,11 @@ def _keep(result: TavilyResult, ctx: Context) -> bool:
     return bool(result.content) and not same_site(result.url, ctx.domain)
 
 
-def calibrate(item: _Item) -> tuple[float, bool, bool]:
-    """(weight, is_hard_flag, is_filler) after the footprint rules."""
+def calibrate(item: _Item, evidence: str = "normal") -> tuple[float, bool, bool]:
+    """(weight, is_hard_flag, is_filler) after the footprint rules. The weight comes from the
+    evidence class (CLASS_WEIGHTS), not from the model."""
     topic = item.topic if item.topic in TOPICS else "other"
-    weight = min(max(item.weight, 0.0), 1.0)
+    weight = CLASS_WEIGHTS[evidence]
     hard = item.is_hard_flag
     if topic == "reviews" and item.polarity == Polarity.NEGATIVE:
         weight, hard = min(weight, MINOR_REVIEW_WEIGHT), False
@@ -210,27 +214,27 @@ def facts_from(
             continue
         if item.topic != "reviews" and not names_entity(item.quote, ctx.domain, entity_names(ctx)):
             continue  # about a sister brand, a parent or a namesake (either polarity)
-        weight, hard, filler = calibrate(item)
         topic = item.topic if item.topic in TOPICS else "other"
         # Review counts and ratings are written as data by our code; the quote stays evidence.
         data = review_statement(item.url, item.quote) if topic == "reviews" else ""
+        fact = Fact(
+            id=fact_id(NAME, len(facts)),
+            collector=NAME,
+            statement=data or item.statement,
+            code_worded=bool(data),
+            source_type=source_type_for(item.url, item.source_type),
+            axis=item.axis,
+            polarity=item.polarity,
+            weight=0.0,
+            source_url=item.url,
+            quote=item.quote,
+            source_kind=SourceKind.INDEPENDENT,
+            fetched_at=today,
+            topic=topic,
+            is_filler=topic == "directory",
+        )
+        weight, hard, filler = calibrate(item, evidence_class(fact))
         facts.append(
-            Fact(
-                id=fact_id(NAME, len(facts)),
-                collector=NAME,
-                statement=data or item.statement,
-                code_worded=bool(data),
-                source_type=source_type_for(item.url, item.source_type),
-                axis=item.axis,
-                polarity=item.polarity,
-                weight=weight,
-                source_url=item.url,
-                quote=item.quote,
-                source_kind=SourceKind.INDEPENDENT,
-                fetched_at=today,
-                is_hard_flag=hard,
-                topic=topic,
-                is_filler=filler,
-            )
+            fact.model_copy(update={"weight": weight, "is_hard_flag": hard, "is_filler": filler})
         )
     return facts

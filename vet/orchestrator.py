@@ -152,7 +152,14 @@ async def run_product(url: str, deps: Deps) -> tuple[ProductRecord, trace.Trace]
             "facts": [f.id for f in check_facts],
         }
     )
-    judgement = await judge(deps.llm, ctx.claims, facts, claim_checks, settings.breach_recent_years)
+    judgement = await judge(
+        deps.llm,
+        ctx.claims,
+        facts,
+        claim_checks,
+        settings.breach_recent_years,
+        settings.label_thresholds,
+    )
     by_id = {f.id: f for f in facts}
     ranked = [by_id[i] for i in judgement.ranked_fact_ids if i in by_id]
     snippets = tavily.snippets if tavily else {}
@@ -169,7 +176,9 @@ async def run_product(url: str, deps: Deps) -> tuple[ProductRecord, trace.Trace]
     )
     reasons = selection.reasons
     failed = {c.fact_id for c in checks if not c.passed}
-    judgement = relabel_after_verification(judgement, facts, failed, settings.breach_recent_years)
+    judgement = relabel_after_verification(
+        judgement, facts, failed, settings.breach_recent_years, settings.label_thresholds
+    )
 
     verdict = Verdict(
         product_url=url,

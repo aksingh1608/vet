@@ -24,6 +24,7 @@ Nothing else goes in this section. DEFENCE.md cites only this section.
 | 2026-11-26 | feat/phase-4c-hardening | `live_check` | — | vet/site_reader.py (re-check after the archive-speed fix) | — | clean | 0 issues. |
 | 2026-11-26 | feat/phase-4c-hardening | `live_check` | — | vet/judge.py, vet/verify.py (mid-age trust tier, trust reason fallback chain) | — | clean | 0 issues. New tests left to the Norma GitHub App check on PR #6. |
 | 2026-11-26 | fix/recall-and-stability | `live_check` (python, secrets, fastapi, sqlalchemy rulesets) | — | vet/collectors/footprint.py, risk.py, alive.py, vet/sources.py, verify.py, config.py, orchestrator.py | — | clean | 0 issues. `.env.example` not sent (`not_checkable` before). Changed/new tests left to the Norma GitHub App check on the PR. |
+| 2026-11-26 | fix/recall-and-stability | `live_check` | — | vet/judge.py, vet/config.py, vet/orchestrator.py, vet/collectors/footprint.py, vet/collectors/risk.py (labels decided in code, weights set in code) | — | clean | 0 issues. Tests left to the Norma GitHub App check on the PR. |
 
 ## Self-review notes (not Norma findings)
 

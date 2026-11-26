@@ -198,3 +198,21 @@ async def test_a_namesakes_good_news_is_not_evidence() -> None:
     ctx.identity = SiteIdentity(vendor_name="Smol Launch")
     facts = await footprint.collect(ctx)
     assert facts == []
+
+
+def test_footprint_weight_comes_from_the_evidence_class_not_the_model() -> None:
+    for model_weight in (0.05, 0.5, 1.7):
+        tavily = FakeTavily({'"Ledgerly" ledgerly.example': [PRESS, CUSTOMER, REVIEWS, PH]})
+        ctx = ctx_with(tavily)
+
+        def classify_with(user: str, w: float = model_weight) -> _Classified:
+            out = classify(user)
+            return _Classified(items=[i.model_copy(update={"weight": w}) for i in out.items])
+
+        ctx.llm = FakeLLM({_Classified: classify_with})
+        import asyncio
+
+        facts = asyncio.run(footprint.collect(ctx))
+        assert {f.source_url: f.weight for f in facts} == {
+            PRESS: 0.5, CUSTOMER: 0.5, REVIEWS: 0.5, PH: 0.1
+        }  # fmt: skip

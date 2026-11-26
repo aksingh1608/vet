@@ -31,6 +31,19 @@ TAVILY_CREDITS_BASIC = 1
 TAVILY_CREDITS_ADVANCED = 2
 
 
+class LabelThresholds(BaseModel):
+    """Score -> label cut-offs. Scores are sums of weight x polarity (+1/-1) over the scored,
+    verified facts of one question. A score exactly at a threshold gets the more cautious
+    label."""
+
+    model_config = ConfigDict(frozen=True)
+
+    real_alive_yes_above: float = 0.0
+    real_alive_no_at_or_below: float = -0.5
+    trust_above: float = 0.3
+    do_not_trust_at_or_below: float = -0.5
+
+
 class HostPolicy(BaseModel):
     """Per-source politeness. Unset fields fall back to the global settings."""
 
@@ -111,6 +124,8 @@ class Settings(BaseModel):
     llm_cache: bool = True
     # A breach younger than this (or never disclosed by the vendor) makes trust "caution".
     breach_recent_years: int = DEFAULT_BREACH_RECENT_YEARS
+    # Labels are decided in code from these cut-offs (VET_LABEL_THRESHOLDS, JSON object).
+    label_thresholds: LabelThresholds = Field(default_factory=LabelThresholds)
 
     # Verdict file format for the organiser ("json" or "csv").
     output_format: OutputFormat = "json"
@@ -175,6 +190,9 @@ class Settings(BaseModel):
             if raw:
                 values[field] = raw.lower() if field == "output_format" else raw
 
+        thresholds = _json_env("VET_LABEL_THRESHOLDS")
+        if thresholds:
+            values["label_thresholds"] = thresholds
         host_overrides = _json_env("VET_HOST_POLICIES")
         if host_overrides:
             values["host_policies"] = {**DEFAULT_HOST_POLICIES, **host_overrides}
