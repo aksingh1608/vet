@@ -21,14 +21,31 @@ DEFAULT_MAX_RETRIES = 2
 DEFAULT_BACKOFF_BASE_S = 1.0
 DEFAULT_MAX_PARALLEL_PRODUCTS = 5
 
-# Minimum seconds between requests per host. Everything not listed gets
-# DEFAULT_HOST_INTERVAL_S (1 request/second). Wayback and crt.sh are pinned at 1 s.
-DEFAULT_HOST_INTERVALS: dict[str, float] = {
-    "web.archive.org": 1.0,
-    "crt.sh": 1.0,
-    "api.tavily.com": 0.25,
-    "api.company-information.service.gov.uk": 0.5,
+TAVILY_CREDITS_BASIC = 1
+TAVILY_CREDITS_ADVANCED = 2
+
+
+class HostPolicy(BaseModel):
+    """Per-source politeness. Unset fields fall back to the global settings."""
+
+    model_config = ConfigDict(frozen=True)
+
+    min_interval_s: float
+    max_retries: int | None = None
+    timeout_s: float | None = None
+
+
+# Everything not listed gets DEFAULT_HOST_INTERVAL_S (1 request/second) and global retries.
+DEFAULT_HOST_POLICIES: dict[str, HostPolicy] = {
+    "web.archive.org": HostPolicy(min_interval_s=3.0),  # Wayback CDX: <= 20/min
+    "crt.sh": HostPolicy(min_interval_s=15.0, max_retries=0, timeout_s=20.0),  # <= 4/min, 1 try
+    "api.company-information.service.gov.uk": HostPolicy(min_interval_s=0.6),  # <= 100/min
+    "haveibeenpwned.com": HostPolicy(min_interval_s=2.0),  # 1 per 2 s
+    "api.tavily.com": HostPolicy(min_interval_s=0.25),
 }
+
+# Never fetched directly. North Data pages are found via Tavily and quoted from its snippet.
+SNIPPET_ONLY_DOMAINS: tuple[str, ...] = ("northdata.com", "northdata.de")
 
 
 class Settings(BaseModel):
@@ -51,7 +68,12 @@ class Settings(BaseModel):
     max_parallel_products: int = DEFAULT_MAX_PARALLEL_PRODUCTS
 
     default_host_interval_s: float = DEFAULT_HOST_INTERVAL_S
-    host_intervals: dict[str, float] = Field(default_factory=lambda: dict(DEFAULT_HOST_INTERVALS))
+    host_policies: dict[str, HostPolicy] = Field(
+        default_factory=lambda: dict(DEFAULT_HOST_POLICIES)
+    )
+    blocked_domains: tuple[str, ...] = SNIPPET_ONLY_DOMAINS
+
+    tavily_advanced: bool = False
 
     contact: str = ""
     cache_path: Path = Path(".cache") / "fetch.sqlite"
@@ -61,6 +83,14 @@ class Settings(BaseModel):
         default_factory=lambda: {v: v.value for v in RealAlive}
     )
     trust_labels: dict[Trust, str] = Field(default_factory=lambda: {v: v.value for v in Trust})
+
+    @property
+    def tavily_search_depth(self) -> str:
+        return "advanced" if self.tavily_advanced else "basic"
+
+    @property
+    def tavily_credits_per_search(self) -> int:
+        return TAVILY_CREDITS_ADVANCED if self.tavily_advanced else TAVILY_CREDITS_BASIC
 
     @property
     def user_agent(self) -> str:
@@ -85,14 +115,15 @@ class Settings(BaseModel):
             ("contact", "VET_CONTACT"),
             ("cache_path", "VET_CACHE_PATH"),
             ("runs_dir", "VET_RUNS_DIR"),
+            ("tavily_advanced", "VET_TAVILY_ADVANCED"),
         ):
             raw = os.environ.get(var, "").strip()
             if raw:
                 values[field] = raw
 
-        host_overrides = _json_env("VET_HOST_INTERVALS")
+        host_overrides = _json_env("VET_HOST_POLICIES")
         if host_overrides:
-            values["host_intervals"] = {**DEFAULT_HOST_INTERVALS, **host_overrides}
+            values["host_policies"] = {**DEFAULT_HOST_POLICIES, **host_overrides}
         for field, var in (
             ("real_alive_labels", "VET_REAL_ALIVE_LABELS"),
             ("trust_labels", "VET_TRUST_LABELS"),

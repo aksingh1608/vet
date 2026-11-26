@@ -6,6 +6,9 @@ Two kinds of calls:
 * APIs (``get_json`` / ``post_json``): no robots.txt check, but the same per-host rate limit,
   timeouts, retries, cache and trace logging. POST exists only for APIs that require it.
 
+Per-host politeness (interval, retries, timeout) comes from ``Settings.host_policies``.
+Hosts under ``Settings.blocked_domains`` (North Data) are never contacted at all.
+
 Every call is cached in SQLite keyed by method + URL (+ a hash of the request body for POST).
 Request headers and bodies are never stored or traced, so API keys never reach disk or logs.
 """
@@ -26,6 +29,7 @@ from urllib.parse import urlsplit
 import httpx
 from pydantic import BaseModel
 
+from vet import trace
 from vet.config import Settings
 
 logger = logging.getLogger(__name__)
@@ -45,6 +49,10 @@ class FetchError(RuntimeError):
 
 class RobotsDisallowed(FetchError):
     """robots.txt forbids fetching this URL."""
+
+
+class BlockedHost(FetchError):
+    """The host is on the never-fetch list (e.g. North Data)."""
 
 
 class FetchStatusError(FetchError):
@@ -181,6 +189,10 @@ def host_of(url: str) -> str:
     return host.lower()
 
 
+def host_matches(host: str, domains: tuple[str, ...]) -> bool:
+    return any(host == d or host.endswith("." + d) for d in domains)
+
+
 class Fetcher:
     def __init__(
         self,
@@ -203,7 +215,10 @@ class Fetcher:
         self._sleep = sleep
         self._trace = trace
         self.limiter = RateLimiter(
-            settings.default_host_interval_s, settings.host_intervals, clock=clock, sleep=sleep
+            settings.default_host_interval_s,
+            {host: p.min_interval_s for host, p in settings.host_policies.items()},
+            clock=clock,
+            sleep=sleep,
         )
         self._robots: dict[str, urllib.robotparser.RobotFileParser] = {}
         self._robots_locks: dict[str, asyncio.Lock] = {}
@@ -221,6 +236,8 @@ class Fetcher:
     # ---- public: web pages (GET only, robots respected) -------------------------------
 
     async def get_text(self, url: str, *, refresh: bool = False) -> FetchResult:
+        if host_matches(host_of(url), self.settings.blocked_domains):
+            raise BlockedHost(f"{host_of(url)} is never fetched directly")
         await self._check_robots(url)
         result = await self._request("GET", url, refresh=refresh)
         _raise_for_status(result)
@@ -259,6 +276,23 @@ class Fetcher:
     ) -> FetchResult:
         """Raw API GET that returns any status (e.g. to tell 404 from an outage)."""
         return await self._request("GET", url, headers=headers, refresh=refresh)
+
+    async def post_api(
+        self,
+        url: str,
+        payload: dict[str, Any],
+        *,
+        headers: dict[str, str] | None = None,
+        refresh: bool = False,
+    ) -> FetchResult:
+        """Raw API POST; the result says whether it came from cache (for credit accounting)."""
+        body = json.dumps(payload, sort_keys=True).encode()
+        merged = {"Content-Type": "application/json", **(headers or {})}
+        return await self._request("POST", url, headers=merged, body=body, refresh=refresh)
+
+    async def cached(self, url: str) -> FetchResult | None:
+        """The cached GET response for a URL, if any. Never touches the network."""
+        return await asyncio.to_thread(self._cache.get, cache_key("GET", url))
 
     # ---- internals ---------------------------------------------------------------------
 
@@ -302,6 +336,10 @@ class Fetcher:
         body: bytes | None = None,
         refresh: bool = False,
     ) -> FetchResult:
+        host = host_of(url)
+        if host_matches(host, self.settings.blocked_domains):
+            self._emit({"event": "blocked_host", "url": url})
+            raise BlockedHost(f"{host} is never fetched directly")
         key = cache_key(method, url, body)
         if not refresh:
             cached = await asyncio.to_thread(self._cache.get, key)
@@ -317,13 +355,22 @@ class Fetcher:
                 )
                 return cached
 
-        host = host_of(url)
+        policy = self.settings.host_policies.get(host)
+        max_retries = self.settings.max_retries
+        timeout: httpx.Timeout | None = None
+        if policy is not None and policy.max_retries is not None:
+            max_retries = policy.max_retries
+        if policy is not None and policy.timeout_s is not None:
+            timeout = httpx.Timeout(policy.timeout_s, connect=self.settings.connect_timeout_s)
+        extra = {"timeout": timeout} if timeout is not None else {}
         last_error: Exception | None = None
-        for attempt in range(self.settings.max_retries + 1):
+        for attempt in range(max_retries + 1):
             await self.limiter.wait(host)
             started = time.monotonic()
             try:
-                response = await self._client.request(method, url, headers=headers, content=body)
+                response = await self._client.request(
+                    method, url, headers=headers, content=body, **extra
+                )
             except httpx.HTTPError as exc:
                 last_error = exc
                 self._emit(
@@ -360,7 +407,7 @@ class Fetcher:
                     await asyncio.to_thread(self._cache.put, key, result)
                     return result
                 last_error = FetchStatusError(url, response.status_code)
-                if attempt == self.settings.max_retries:
+                if attempt == max_retries:
                     return FetchResult(
                         url=url,
                         final_url=str(response.url),
@@ -373,7 +420,7 @@ class Fetcher:
                 if retry_after is not None:
                     await self._sleep(retry_after)
                     continue
-            if attempt < self.settings.max_retries:
+            if attempt < max_retries:
                 await self._sleep(self.settings.backoff_base_s * 2**attempt)
 
         raise FetchError(f"{method} {url} failed after retries: {last_error!r}")
@@ -381,6 +428,13 @@ class Fetcher:
     def _emit(self, event: dict[str, Any]) -> None:
         if self._trace is not None:
             self._trace(event)
+        current = trace.current()
+        if current is not None:
+            current.emit(event)
+            if event.get("event") == "fetch":
+                current.usage.fetches += 1
+                if event.get("cache") == "hit":
+                    current.usage.fetch_cache_hits += 1
         logger.debug("fetch event: %s", event)
 
 

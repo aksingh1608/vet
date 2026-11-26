@@ -9,7 +9,7 @@ data/labelled/*
 runs/
 
 # Generated output
-site/
+/site/
 .cache/
 *.sqlite
 *.sqlite3

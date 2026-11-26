@@ -64,3 +64,87 @@ def make_fetcher(settings: Settings, clock: FakeClock):
         return Fetcher(settings, client=client, cache=cache, clock=clock, sleep=clock.sleep)
 
     return _make
+
+
+FIXTURES = Path(__file__).parent / "fixtures"
+FAKE_TAVILY_TOKEN = "tvly-test-not-real"  # noqa: S105 - placeholder, never sent anywhere
+FAKE_CH_TOKEN = "ch-test-not-real"  # noqa: S105 - placeholder, never sent anywhere
+
+
+def fixture_text(name: str) -> str:
+    return (FIXTURES / name).read_text(encoding="utf-8")
+
+
+class Router:
+    """Mock transport: the first route whose substring occurs in the URL answers.
+
+    robots.txt allows everything unless a route says otherwise; anything else is a 404.
+    """
+
+    def __init__(self, routes: list[tuple[str, object]]) -> None:
+        self.routes = routes
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        url = str(request.url)
+        for needle, answer in self.routes:
+            if needle in url:
+                if callable(answer):
+                    return answer(request)
+                if isinstance(answer, httpx.Response):
+                    return answer
+                if isinstance(answer, int):
+                    return httpx.Response(answer)
+                if isinstance(answer, str):
+                    return httpx.Response(200, text=answer)
+                return httpx.Response(200, json=answer)
+        if request.url.path == "/robots.txt":
+            return httpx.Response(200, text="User-agent: *\nAllow: /\n")
+        return httpx.Response(404, text="not found")
+
+
+class FakeLLM:
+    """Stands in for vet.llm.LLM. Responders map an output type to a function of the prompt."""
+
+    def __init__(self, responders: dict[type, Callable[[str], object]] | None = None) -> None:
+        self.responders = dict(responders or {})
+        self.calls: list[tuple[str, str]] = []
+
+    async def structured(self, *, kind, system, user, output, step, max_tokens=8000):  # noqa: ANN001
+        self.calls.append((step, user))
+        if output not in self.responders:
+            from vet.llm import LLMError
+
+            raise LLMError(f"no fake responder for {output.__name__}")
+        return self.responders[output](user)
+
+
+@pytest.fixture
+def keyed_settings(tmp_path: Path) -> Settings:
+    from pydantic import SecretStr
+
+    return Settings(
+        cache_path=tmp_path / "cache.sqlite",
+        contact="test",
+        tavily_api_key=SecretStr(FAKE_TAVILY_TOKEN),
+        companies_house_api_key=SecretStr(FAKE_CH_TOKEN),
+    )
+
+
+@pytest.fixture
+def router_fetcher(keyed_settings: Settings, clock: FakeClock):
+    """Build a Fetcher over a Router; returns (fetcher, recorder)."""
+
+    def _make(routes: list[tuple[str, object]]) -> tuple[Fetcher, Recorder]:
+        rec = Recorder(Router(routes))
+        rec.clock = clock
+        client = httpx.AsyncClient(transport=httpx.MockTransport(rec), follow_redirects=True)
+        fetcher = Fetcher(
+            keyed_settings,
+            client=client,
+            cache=FetchCache(keyed_settings.cache_path),
+            clock=clock,
+            sleep=clock.sleep,
+        )
+        return fetcher, rec
+
+    return _make
