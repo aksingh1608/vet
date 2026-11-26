@@ -9,6 +9,9 @@ Nothing else goes in this section. DEFENCE.md cites only this section.
 |---|---|---|---|---|---|---|---|
 | 2026-11-25 | feat/phase-2-first-verdict (PR #2) | `live_check` (python, secrets, fastapi, sqlalchemy rulesets) | — | 29 `.py` source and test files | — | clean | 0 issues. `.env.example` and `.gitignore` returned `not_checkable` (no rules for these file types). Outcome registered with `register_applied_actions` (11 verified compliant, 3 prevented). |
 | 2026-11-25 | feat/phase-2-first-verdict (PR #2) | Norma GitHub App PR check | — | files changed by PR #2 | — | clean | "No issues introduced by your changes." [Report](https://norma.qualityclouds.com/projects/12410) |
+| 2026-11-26 | feat/phase-3-signals | `live_check` (python, secrets, fastapi, sqlalchemy rulesets) | py-mng-open-no-encoding | vet/report.py:52, :54 | LOW | fixed | `read_text("utf-8")` passed the encoding positionally; changed to `read_text(encoding="utf-8")`. Re-check clean. |
+| 2026-11-26 | feat/phase-3-signals | `live_check` | py-perf-double-lookup | vet/verify.py:450 | LOW | fixed | `if fid in by_id: pool[fid] = by_id[fid]` looked the key up twice; now one `by_id.get(fid)`. Re-check clean. |
+| 2026-11-26 | feat/phase-3-signals | `live_check` | — | 24 changed `vet/` source files | — | clean | After the two fixes above, 0 issues. The 16 changed test files were not sent to `live_check` (free plan, scans used sparingly); the Norma GitHub App check on PR #3 covers them. Templates (`.j2`) and prompts (`.md`) have no applicable rules. |
 
 ## Self-review notes (not Norma findings)
 

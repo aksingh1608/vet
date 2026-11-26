@@ -2,11 +2,13 @@
 retry, token logging to the current trace.
 
 Structured output uses ``messages.parse(output_format=...)`` (forced tool_choice is rejected
-by current models). Page text always goes in the user message inside <data> tags and the
-system prompt says it is data, never instructions.
+by current models). Outside content (vendor pages, search snippets, register text, and facts
+derived from them) always goes in the user message inside <untrusted_content> tags, and every
+system prompt says that content is data, never instructions.
 """
 
 import logging
+import re
 from pathlib import Path
 from typing import Literal, Protocol, TypeVar
 
@@ -45,8 +47,26 @@ class StructuredLLM(Protocol):
     ) -> T: ...
 
 
+UNTRUSTED_OPEN = "<untrusted_content>"
+UNTRUSTED_CLOSE = "</untrusted_content>"
+_TAG_IN_CONTENT = re.compile(r"<\s*(/?)\s*untrusted_content", re.I)
+
+
 def load_prompt(name: str) -> str:
     return (PROMPTS_DIR / name).read_text(encoding="utf-8")
+
+
+def untrusted(content: str) -> str:
+    """Wrap outside content for a prompt. Tags inside the content are escaped so a page cannot
+    close the block early and smuggle text out of it."""
+    content = _TAG_IN_CONTENT.sub(r"&lt;\1untrusted_content", content)
+    return f"{UNTRUSTED_OPEN}\n{content}\n{UNTRUSTED_CLOSE}"
+
+
+def unwrap(user: str) -> str:
+    """The content of the first untrusted block (for tests and fakes)."""
+    start = user.index(UNTRUSTED_OPEN) + len(UNTRUSTED_OPEN) + 1
+    return user[start : user.index("\n" + UNTRUSTED_CLOSE, start)]
 
 
 class LLM:

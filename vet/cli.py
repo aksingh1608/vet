@@ -17,6 +17,7 @@ from vet.config import Settings
 from vet.output import VERDICTS_FILE, validate_verdict_file, write_run
 
 GIT_TIMEOUT_S = 5
+SITE_DIR = Path("site")
 
 app = typer.Typer(
     name="vet",
@@ -104,6 +105,7 @@ def run(
         "conf",
         "reasons",
         "secs",
+        "findings",
         "tavily credits",
         "errors",
     ):
@@ -117,6 +119,7 @@ def run(
             f"{v.confidence:.2f}",
             str(len(v.reasons)),
             f"{r.seconds:.0f}",
+            str(len(v.findings)),
             str(r.usage.tavily_credits),
             str(len(r.errors)),
         )
@@ -146,7 +149,14 @@ def report(
     ] = False,
 ) -> None:
     """Render a static HTML report into site/."""
-    _not_ready("report", 3)
+    from vet.report import PublicExportRefused, render
+
+    try:
+        written = render(run_dir, SITE_DIR, public=public)
+    except PublicExportRefused as exc:
+        console.print(f"[red]✗[/red] {exc}")
+        raise typer.Exit(code=1) from exc
+    console.print(f"[green]✓[/green] wrote {len(written)} pages to {SITE_DIR}/")
 
 
 @app.command("eval")

@@ -10,12 +10,12 @@ import json
 import logging
 import re
 from datetime import UTC, datetime
-from urllib.parse import urlencode
+from urllib.parse import unquote_plus, urlencode
 
 from pydantic import BaseModel
 
 from vet.collectors.base import Context, fact_id
-from vet.llm import load_prompt
+from vet.llm import load_prompt, untrusted
 from vet.schemas import Axis, Fact, Polarity, SourceKind
 from vet.text import contains_quote, normalize
 
@@ -128,6 +128,7 @@ async def companies_house_facts(ctx: Context, today: datetime) -> list[Fact]:
                     source_kind=SourceKind.RECORD,
                     fetched_at=today,
                     is_hard_flag=True,
+                    topic="contradicted_claim",
                 )
             ]
         return []
@@ -148,14 +149,17 @@ async def companies_house_facts(ctx: Context, today: datetime) -> list[Fact]:
             polarity=Polarity.NEGATIVE if bad else Polarity.POSITIVE,
             weight=0.9 if bad else 0.5,
             source_url=page,
+            check_url=f"{CH_API}/company/{number}",
             quote="",
             source_kind=SourceKind.RECORD,
             fetched_at=today,
             is_hard_flag=bad,
+            topic="insolvency" if bad else "register_record",
         )
     ]
     if created:
-        years = (today - datetime.fromisoformat(created).replace(tzinfo=UTC)).days / 365.25
+        incorporated = datetime.fromisoformat(created).replace(tzinfo=UTC)
+        years = (today - incorporated).days / 365.25
         facts.append(
             Fact(
                 id=fact_id(NAME, 2),
@@ -165,9 +169,12 @@ async def companies_house_facts(ctx: Context, today: datetime) -> list[Fact]:
                 polarity=Polarity.POSITIVE if years >= 2 else Polarity.NEUTRAL,
                 weight=0.4 if years >= 5 else 0.2,
                 source_url=page,
+                check_url=f"{CH_API}/company/{number}",
                 quote="",
                 source_kind=SourceKind.RECORD,
                 fetched_at=today,
+                topic="register_founded",
+                observed_at=incorporated,
             )
         )
     if ctx.identity.legal_entity and _entity_key(name) != _entity_key(ctx.identity.legal_entity):
@@ -181,9 +188,12 @@ async def companies_house_facts(ctx: Context, today: datetime) -> list[Fact]:
                 polarity=Polarity.NEGATIVE,
                 weight=0.6,
                 source_url=page,
+                check_url=f"{CH_API}/company/{number}",
                 quote="",
                 source_kind=SourceKind.RECORD,
                 fetched_at=today,
+                is_hard_flag=True,
+                topic="contradicted_claim",
             )
         )
     return facts
@@ -197,6 +207,33 @@ def northdata_query(ctx: Context) -> str:
     return f'"{ident.legal_entity}" {ident.register_number}'.strip()
 
 
+def url_record_fact(ctx: Context, url: str, today: datetime) -> Fact | None:
+    """A North Data result whose URL names the claimed entity AND register number is a register
+    record, decided in code. The URL is the evidence (North Data puts entity, court and number
+    in the path); a human can open it, and the verifier checks Tavily returned it."""
+    entity = normalize(ctx.identity.legal_entity)
+    digits = _digits(ctx.identity.register_number)
+    if not entity or not digits:
+        return None
+    path = normalize(unquote_plus(url))
+    if entity not in path or not re.search(rf"(?<!\d){digits}(?!\d)", path):
+        return None
+    reg = " ".join(x for x in (ctx.identity.register_court, ctx.identity.register_number) if x)
+    return Fact(
+        id=fact_id(NAME, 9),
+        collector=NAME,
+        statement=f"North Data has a register page for {ctx.identity.legal_entity} ({reg})",
+        axis=Axis.TRUST,
+        polarity=Polarity.POSITIVE,
+        weight=0.45,
+        source_url=url,
+        quote="",
+        source_kind=SourceKind.RECORD,
+        fetched_at=today,
+        topic="register_record",
+    )
+
+
 async def northdata_facts(ctx: Context, today: datetime) -> list[Fact]:
     if ctx.tavily is None:
         return []
@@ -205,9 +242,12 @@ async def northdata_facts(ctx: Context, today: datetime) -> list[Fact]:
         include_domains=NORTHDATA_DOMAINS,
         max_results=NORTHDATA_MAX_RESULTS,
     )
+    url_fact = next(
+        (f for r in results if (f := url_record_fact(ctx, r.url, today)) is not None), None
+    )
     results = [r for r in results if r.content]
     if not results:
-        return []
+        return [url_fact] if url_fact else []
     payload = {
         "entity": ctx.identity.legal_entity,
         "claimed_register_number": ctx.identity.register_number,
@@ -217,12 +257,12 @@ async def northdata_facts(ctx: Context, today: datetime) -> list[Fact]:
     out = await ctx.llm.structured(
         kind="fast",
         system=load_prompt("legal_record.md"),
-        user=f"<data>\n{json.dumps(payload, ensure_ascii=False)}\n</data>",
+        user=untrusted(json.dumps(payload, ensure_ascii=False)),
         output=_Records,
         step="legal_record",
     )
     content = {r.url: r.content for r in results}
-    facts: list[Fact] = []
+    facts: list[Fact] = [url_fact] if url_fact else []
     for rec in out.records:
         snippet = content.get(rec.url)
         if not rec.same_entity or snippet is None:
@@ -231,21 +271,23 @@ async def northdata_facts(ctx: Context, today: datetime) -> list[Fact]:
             continue
         n = len(facts)
         reg = " ".join(x for x in (rec.register_court, rec.register_number) if x)
-        facts.append(
-            Fact(
-                id=fact_id(NAME, 10 + n),
-                collector=NAME,
-                statement=f"North Data has a register record for {ctx.identity.legal_entity}"
-                + (f" ({reg})" if reg else ""),
-                axis=Axis.TRUST,
-                polarity=Polarity.POSITIVE,
-                weight=0.45,
-                source_url=rec.url,
-                quote=rec.quote,
-                source_kind=SourceKind.RECORD,
-                fetched_at=today,
+        if url_fact is None:
+            facts.append(
+                Fact(
+                    id=fact_id(NAME, 10 + n),
+                    collector=NAME,
+                    statement=f"North Data has a register record for {ctx.identity.legal_entity}"
+                    + (f" ({reg})" if reg else ""),
+                    axis=Axis.TRUST,
+                    polarity=Polarity.POSITIVE,
+                    weight=0.45,
+                    source_url=rec.url,
+                    quote=rec.quote,
+                    source_kind=SourceKind.RECORD,
+                    fetched_at=today,
+                    topic="register_record",
+                )
             )
-        )
         status = rec.status.lower()
         if any(b in status for b in BAD_STATUSES):
             facts.append(
@@ -262,6 +304,7 @@ async def northdata_facts(ctx: Context, today: datetime) -> list[Fact]:
                     source_kind=SourceKind.RECORD,
                     fetched_at=today,
                     is_hard_flag=True,
+                    topic="insolvency",
                 )
             )
         year = _year(rec.founded)
@@ -279,6 +322,8 @@ async def northdata_facts(ctx: Context, today: datetime) -> list[Fact]:
                     quote=rec.founded,
                     source_kind=SourceKind.RECORD,
                     fetched_at=today,
+                    topic="register_founded",
+                    observed_at=datetime(year, 1, 1, tzinfo=UTC),
                 )
             )
         claimed = _digits(ctx.identity.register_number)
@@ -297,6 +342,8 @@ async def northdata_facts(ctx: Context, today: datetime) -> list[Fact]:
                     quote=rec.register_number,
                     source_kind=SourceKind.RECORD,
                     fetched_at=today,
+                    is_hard_flag=True,
+                    topic="contradicted_claim",
                 )
             )
         break  # one matching record is enough

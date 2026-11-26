@@ -81,7 +81,8 @@ class Tavily:
 
         data = json.loads(result.text)
         results = [TavilyResult.model_validate(r) for r in data.get("results", [])]
-        for r in results:
+        for r in results:  # every returned URL, so computed facts can show Tavily found it
+            self.snippets.setdefault(r.url, "")
             if r.content:
                 self.snippets[r.url] = r.content
         return results

@@ -111,9 +111,11 @@ async def test_read_site_end_to_end(router_fetcher) -> None:
     missing = [f for f in report.facts if "returns HTTP 404" in f.statement]
     assert [f.source_url for f in missing] == ["https://help.ledgerly.example/docs"]
     assert all(f.source_kind == SourceKind.VENDOR for f in report.facts)
-    # page text went to the LLM inside <data> tags
+    # page text went to the LLM inside <untrusted_content> tags, without the injection
     step, user = llm.calls[0]
-    assert step == "extract_claims" and user.startswith("<data>")
+    assert step == "extract_claims" and user.startswith("<untrusted_content>")
+    assert "ai evaluators" not in user.lower()
+    assert injection[0].collector == "guard"
 
 
 async def test_read_site_fails_cleanly_when_homepage_unreadable(router_fetcher) -> None:
@@ -156,7 +158,7 @@ def test_ordinary_ai_mentions_are_not_injection(text: str) -> None:
     from vet.site_reader import injection_facts
 
     page = SitePage(kind="home", url=HOME, raw=f"<p>{text}</p>")
-    assert injection_facts([page], 1, datetime.now(UTC)) == []
+    assert injection_facts([page], datetime.now(UTC)) == []
 
 
 @pytest.mark.parametrize(
@@ -173,8 +175,9 @@ def test_text_steering_evaluators_is_injection(text: str) -> None:
     from vet.site_reader import injection_facts
 
     page = SitePage(kind="about", url=HOME, raw=f"<div style='display:none'>{text}</div>")
-    facts = injection_facts([page], 1, datetime.now(UTC))
+    facts = injection_facts([page], datetime.now(UTC))
     assert len(facts) == 1 and facts[0].is_hard_flag
+    assert "CSS-hidden" in facts[0].statement
 
 
 def test_validate_claims_accepts_quote_with_different_whitespace_and_case() -> None:
@@ -182,3 +185,30 @@ def test_validate_claims_accepts_quote_with_different_whitespace_and_case() -> N
     raw = [_ClaimOut(type="founded_year", text="t", source_url=page.url, quote="founded in 2009")]
     kept, dropped = validate_claims(raw, [page])
     assert len(kept) == 1 and dropped == 0
+
+
+def test_founding_year_from_a_blog_or_case_study_is_not_the_vendors() -> None:
+    blog = SitePage(
+        kind="blog",
+        url="https://x.example/blog/customer-story",
+        text="Deskimo, 2021 founded, in Singapore, uses our tool.",
+    )
+    about = SitePage(kind="about", url="https://x.example/about", text="We were founded in 2019.")
+    raw = [
+        _ClaimOut(type="founded_year", text="t", source_url=blog.url, quote="2021 founded"),
+        _ClaimOut(type="customer", text="t", source_url=blog.url, quote="Deskimo, 2021 founded"),
+        _ClaimOut(type="founded_year", text="t", source_url=about.url, quote="founded in 2019"),
+    ]
+    kept, dropped = validate_claims(raw, [blog, about])
+    assert [(c.type, c.source_url) for c in kept] == [
+        ("customer", blog.url),
+        ("founded_year", about.url),
+    ]
+    assert dropped == 1
+
+
+def test_quote_matches_across_tag_boundaries() -> None:
+    from vet.text import contains_quote
+
+    assert contains_quote("<p><b>2021</b>founded, in Singapore</p>", "2021founded, in Singapore")
+    assert not contains_quote("<p><b>2021</b>founded</p>", "2022founded")

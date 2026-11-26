@@ -245,7 +245,7 @@ class Fetcher:
 
     async def get_page(self, url: str, *, refresh: bool = False) -> Page:
         result = await self.get_text(url, refresh=refresh)
-        text = await asyncio.to_thread(_extract_main_text, result.text, result.final_url)
+        text = await asyncio.to_thread(extract_main_text, result.text, result.final_url)
         return Page(result=result, text=text)
 
     # ---- public: APIs (no robots check) ------------------------------------------------
@@ -451,7 +451,7 @@ def _retry_after_seconds(response: httpx.Response) -> float | None:
         return None
 
 
-def _extract_main_text(html: str, url: str) -> str:
+def extract_main_text(html: str, url: str) -> str:
     import trafilatura
 
     return trafilatura.extract(html, url=url, include_comments=False) or ""

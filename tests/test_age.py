@@ -34,17 +34,23 @@ async def test_age_facts_from_all_three_sources(router_fetcher) -> None:
     fetcher, rec = router_fetcher(routes())
     async with fetcher:
         facts = await age.collect(ctx_for(fetcher))
-    by_source = {f.source_url.split("/")[2]: f for f in facts}
+    by_topic = {f.topic: f for f in facts}
 
-    rdap = by_source["rdap.org"]
+    rdap = by_topic["domain_registered"]
     assert "registered on 2008-05-14" in rdap.statement
     assert rdap.quote == "2008-05-14T10:00:00Z"  # verifiable in the cached RDAP JSON
     assert rdap.polarity == Polarity.POSITIVE
+    # human link to the ICANN lookup; verified against the RDAP JSON
+    assert rdap.source_url == "https://lookup.icann.org/en/lookup?name=ledgerly.example"
+    assert rdap.check_url == "https://rdap.org/domain/ledgerly.example"
+    assert rdap.observed_at is not None and rdap.observed_at.year == 2008
 
-    crt = by_source["crt.sh"]
+    crt = by_topic["first_certificate"]
     assert "2012-01-20" in crt.statement  # the earliest of the two certificates
+    assert crt.source_url == "https://crt.sh/?q=ledgerly.example"  # no output=json
+    assert "output=json" in crt.check_url
 
-    first, years = [f for f in facts if "web.archive.org" in f.source_url]
+    first, years = by_topic["first_capture"], by_topic["capture_history"]
     assert "earliest Wayback Machine capture of ledgerly.example is from 2009-02-14" in (
         first.statement
     )
@@ -52,6 +58,8 @@ async def test_age_facts_from_all_three_sources(router_fetcher) -> None:
     assert first.quote == ""  # computed fact: verified by resolving the snapshot
     assert "18 of the 18 years from 2009 to 2026" in years.statement
     assert years.polarity == Polarity.POSITIVE
+    assert years.source_url == "https://web.archive.org/web/*/ledgerly.example"
+    assert "collapse=timestamp" in years.check_url
     assert all(f.source_kind == SourceKind.RECORD for f in facts)
     assert not any("northdata" in str(r.url) for r in rec.requests)
 
@@ -67,8 +75,8 @@ async def test_crtsh_failure_is_optional(router_fetcher) -> None:
     async with fetcher:
         facts = await age.collect(ctx_for(fetcher))
     assert calls["crt"] == 1  # one attempt only
-    assert not any("crt.sh" in f.source_url for f in facts)
-    assert any("rdap.org" in f.source_url for f in facts)
+    assert not any(f.topic == "first_certificate" for f in facts)
+    assert any(f.topic == "domain_registered" for f in facts)
     assert any("web.archive.org" in f.source_url for f in facts)
 
 
@@ -76,7 +84,7 @@ async def test_de_rdap_without_creation_date_gives_no_rdap_fact(router_fetcher) 
     fetcher, _ = router_fetcher(routes(**{"rdap.org/domain/": fixture_text("api/rdap_de.json")}))
     async with fetcher:
         facts = await age.collect(ctx_for(fetcher))
-    assert not any("rdap.org" in f.source_url for f in facts)
+    assert not any(f.topic == "domain_registered" for f in facts)
     assert any("web.archive.org" in f.source_url for f in facts)
 
 
@@ -88,7 +96,8 @@ async def test_no_wayback_captures_is_a_negative_record_fact(router_fetcher) -> 
     none = [f for f in facts if "no captures" in f.statement]
     assert len(none) == 1
     assert none[0].polarity == Polarity.NEGATIVE
-    assert "cdx/search/cdx" in none[0].source_url  # the checkable CDX query
+    assert "cdx/search/cdx" in none[0].check_url  # the checkable CDX query
+    assert none[0].source_url == "https://web.archive.org/web/*/ledgerly.example"
 
 
 async def test_young_domain_is_negative(router_fetcher) -> None:
@@ -98,5 +107,5 @@ async def test_young_domain_is_negative(router_fetcher) -> None:
     fetcher, _ = router_fetcher(routes(**{"rdap.org/domain/": young}))
     async with fetcher:
         facts = await age.collect(ctx_for(fetcher))
-    rdap = next(f for f in facts if "rdap.org" in f.source_url)
+    rdap = next(f for f in facts if f.topic == "domain_registered")
     assert rdap.polarity == Polarity.NEGATIVE

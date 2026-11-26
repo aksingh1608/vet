@@ -83,6 +83,17 @@ class Fact(_Model):
     source_kind: SourceKind
     fetched_at: datetime
     is_hard_flag: bool = False
+    # Machine-readable record to verify against when source_url is a human page that cannot be
+    # checked directly (RDAP JSON behind an ICANN lookup link, crt.sh JSON, a CDX query).
+    check_url: str = ""
+    # What kind of signal this is (e.g. domain_registered, breach, reviews, contradicted_claim).
+    topic: str = ""
+    # When the observed event happened (registration, first capture, release, breach).
+    observed_at: datetime | None = None
+    # Low-value material (copyright year, directory listings, site looks): last-resort reasons.
+    is_filler: bool = False
+    # Facts this one is built on (claims_check), all of which must verify too.
+    related_fact_ids: list[str] = Field(default_factory=list)
 
 
 class ClaimCheck(_Model):
@@ -101,6 +112,14 @@ class Reason(_Model):
     fact_id: str
 
 
+class Finding(_Model):
+    """A notable contradiction or red flag, built from a verified fact, with its link."""
+
+    text: str
+    source_url: str
+    fact_id: str
+
+
 class Verdict(_Model):
     product_url: str
     real_alive: RealAlive
@@ -108,7 +127,7 @@ class Verdict(_Model):
     confidence: float = Field(ge=0.0, le=1.0)
     summary: str
     reasons: list[Reason] = Field(max_length=MAX_REASONS)
-    findings: list[str]
+    findings: list[Finding]
     run_id: str
     git_sha: str
     model: str

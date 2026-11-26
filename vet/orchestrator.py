@@ -1,8 +1,9 @@
 """One product, end to end, inside a time budget.
 
-age starts at once (domain only) in parallel with the site reader; legal_id and footprint
-start when the claims are in. Collectors that are still running when the collection deadline
-passes are cancelled and recorded as timed out; the judge and verifier always run.
+age starts at once (domain only) in parallel with the site reader; legal_id, footprint, risk,
+alive and looks start when the site has been read. Collectors that are still running when the
+collection deadline passes are cancelled and recorded as timed out. Then claims_check, the
+judge, verification and reason selection always run.
 """
 
 import asyncio
@@ -14,8 +15,9 @@ from datetime import UTC, datetime
 from urllib.parse import urlsplit, urlunsplit
 
 from vet import trace
-from vet.collectors import age, footprint, legal_id
-from vet.collectors.base import CollectorResult, Context, run_collector
+from vet.claims_check import check_claims
+from vet.collectors import age, alive, footprint, legal_id, looks, risk
+from vet.collectors.base import Collector, CollectorResult, Context, run_collector
 from vet.config import Settings
 from vet.fetch import Fetcher
 from vet.judge import judge
@@ -25,13 +27,21 @@ from vet.schemas import Verdict
 from vet.site_reader import SiteReport, read_site
 from vet.tavily import Tavily
 from vet.text import registered_domain
-from vet.verify import verify_reasons
+from vet.verify import verify_and_select
 
 logger = logging.getLogger(__name__)
 
 # Seconds kept back from the product budget for judge + verification.
 JUDGE_AND_VERIFY_RESERVE_S = 60.0
 MIN_COLLECT_WINDOW_S = 20.0
+# Collectors that need the site reader's output (claims, identity, pages).
+AFTER_SITE: dict[str, Collector] = {
+    "legal_id": legal_id.collect,
+    "footprint": footprint.collect,
+    "risk": risk.collect,
+    "alive": alive.collect,
+    "looks": looks.collect,
+}
 
 
 @dataclass
@@ -101,24 +111,25 @@ async def run_product(url: str, deps: Deps) -> tuple[ProductRecord, trace.Trace]
     )
     timeout = settings.collector_timeout_s
 
-    age_task = asyncio.create_task(run_collector("age", age.collect, ctx, timeout))
+    tasks: dict[str, asyncio.Task[CollectorResult]] = {
+        "age": asyncio.create_task(run_collector("age", age.collect, ctx, timeout))
+    }
     report, site_result = await _site(ctx, timeout)
     if report is not None:
-        ctx.claims, ctx.identity = report.claims, report.identity
-    tasks = [age_task]
-    if report is not None:
-        tasks += [
-            asyncio.create_task(run_collector("legal_id", legal_id.collect, ctx, timeout)),
-            asyncio.create_task(run_collector("footprint", footprint.collect, ctx, timeout)),
-        ]
+        ctx.claims, ctx.identity, ctx.pages = report.claims, report.identity, report.pages
+    # Run even when the homepage is unreadable (e.g. a WAF answers 403): search and breach
+    # records need only the domain, and the domain name stands in for the vendor name.
+    for name, collect in AFTER_SITE.items():
+        tasks[name] = asyncio.create_task(run_collector(name, collect, ctx, timeout))
     window = max(deadline - time.monotonic(), MIN_COLLECT_WINDOW_S)
-    done, pending = await asyncio.wait(tasks, timeout=window)
+    done, pending = await asyncio.wait(tasks.values(), timeout=window)
     for task in pending:
         task.cancel()
-    results = [site_result] + [task.result() for task in tasks if task in done]
-    names = ["age", "legal_id", "footprint"]
-    for task, name in zip(tasks, names, strict=False):
-        if task in pending:
+    results = [site_result]
+    for name, task in tasks.items():
+        if task in done:
+            results.append(task.result())
+        else:
             results.append(
                 CollectorResult(
                     name=name,
@@ -129,11 +140,33 @@ async def run_product(url: str, deps: Deps) -> tuple[ProductRecord, trace.Trace]
             )
 
     facts = [f for r in results for f in r.facts]
-    judgement = await judge(deps.llm, ctx.claims, facts)
+    names = {ctx.identity.vendor_name, ctx.identity.product_name, ctx.domain.split(".")[0]}
+    claim_checks, check_facts = check_claims(
+        ctx.claims, facts, ctx.domain, names, datetime.now(UTC)
+    )
+    facts += check_facts
+    trace.emit(
+        {
+            "event": "claims_check",
+            "checks": [c.model_dump() for c in claim_checks],
+            "facts": [f.id for f in check_facts],
+        }
+    )
+    judgement = await judge(deps.llm, ctx.claims, facts, claim_checks)
     by_id = {f.id: f for f in facts}
     ranked = [by_id[i] for i in judgement.ranked_fact_ids if i in by_id]
     snippets = tavily.snippets if tavily else {}
-    reasons, checks = await verify_reasons(ranked, deps.fetcher, deps.llm, snippets, settings)
+    selection, checks = await verify_and_select(
+        ranked,
+        facts,
+        judgement.finding_fact_ids,
+        deps.fetcher,
+        deps.llm,
+        snippets,
+        settings,
+        ctx.domain,
+    )
+    reasons = selection.reasons
 
     verdict = Verdict(
         product_url=url,
@@ -142,7 +175,7 @@ async def run_product(url: str, deps: Deps) -> tuple[ProductRecord, trace.Trace]
         confidence=judgement.confidence,
         summary=judgement.summary,
         reasons=reasons,
-        findings=judgement.findings,
+        findings=selection.findings,
         run_id=deps.run_id,
         git_sha=deps.git_sha,
         model=deps.model,
@@ -164,10 +197,12 @@ async def run_product(url: str, deps: Deps) -> tuple[ProductRecord, trace.Trace]
         verdict=verdict,
         identity=ctx.identity,
         claims=ctx.claims,
+        claim_checks=claim_checks,
         facts=facts,
         collectors=results,
         verification=checks,
         judge_notes=judgement.notes,
+        selection_notes=selection.notes,
         used_llm_judge=judgement.used_llm,
         usage=t.usage,
         seconds=seconds,

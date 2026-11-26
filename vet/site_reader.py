@@ -1,5 +1,6 @@
 """Read the vendor's own site: discover key pages, extract claims, and record a few site facts
-(copyright year, missing pages, text addressed to AI systems).
+(copyright year, missing pages). The guard scans every page for text addressed to AI systems
+and strips it, with hidden text and comments, before anything reaches the LLM.
 
 Everything here is VENDOR-sourced. Claims are things to check; site facts can only count
 against the vendor, never for it.
@@ -13,9 +14,10 @@ from urllib.parse import urlsplit
 
 from pydantic import BaseModel, Field
 
-from vet.collectors.base import Context, SiteIdentity, fact_id
-from vet.fetch import FetchError, FetchStatusError, Page
-from vet.llm import load_prompt
+from vet import guard
+from vet.collectors.base import Context, SiteIdentity, SitePage, fact_id
+from vet.fetch import FetchError, FetchStatusError, extract_main_text
+from vet.llm import load_prompt, untrusted
 from vet.schemas import Axis, Claim, ClaimType, Fact, Polarity, SourceKind
 from vet.text import clean_url, contains_quote, extract_links, html_to_text, same_site, truncate
 
@@ -25,7 +27,6 @@ MAX_PAGES = 15
 PAGE_CHARS_FOR_LLM = 3500
 TOTAL_CHARS_FOR_LLM = 40000
 STALE_COPYRIGHT_YEARS = 2
-INJECTION_CONTEXT_CHARS = 160
 
 # Page kind -> keywords matched against link path and anchor text (EN + DE).
 PAGE_KINDS: dict[str, tuple[str, ...]] = {
@@ -58,30 +59,6 @@ FALLBACK_PATHS: dict[str, tuple[str, ...]] = {
 _COPYRIGHT = re.compile(
     r"(?:©|&copy;|\(c\)|copyright)\s*(?:\d{4}\s*[-–]\s*)?((?:19|20)\d{2})", re.I
 )
-# Text that tells an AI or evaluator what to do or conclude. Mentions of AI products or
-# categories ("AI Assistants", "our AI agent drafts invoices") must not match.
-_INJECTION = re.compile(
-    r"ignore (?:all |any )?(?:previous|prior|above|earlier) instructions"
-    r"|(?:if|when) you are an? (?:ai|llm|large language model|language model|assistant|agent|bot)\b"
-    r"|\b(?:note|message|instructions?) (?:to|for) (?:any |all )?(?:ai|llms?|language models?"
-    r"|ai (?:assistants?|agents?|evaluators?)|evaluators?|reviewers? using ai)\b"
-    r"|\b(?:ai|llm|language model)s? (?:evaluators?|reviewers?|auditors?|assessors?)\b"
-    r"|\b(?:rate|score|classify|mark|consider|label) (?:this|the|our) (?:vendor|company|product"
-    r"|site|website|business) as (?:fully |highly |very )?(?:trust\w*|safe|legit\w*|real"
-    r"|reliable|reputable)",
-    re.I,
-)
-
-
-class SitePage(BaseModel):
-    kind: str
-    url: str
-    final_url: str = ""
-    status: int = 0
-    text: str = ""  # extracted main text
-    raw: str = ""  # raw HTML (kept for quote checks, never sent to the LLM in full)
-    error: str = ""
-    guessed: bool = False  # a fallback path we tried, not a link the site shows
 
 
 class _ClaimOut(BaseModel):
@@ -146,20 +123,27 @@ def plan_pages(
     return plan[: MAX_PAGES - 1]
 
 
+def llm_text(raw: str, url: str) -> str:
+    """What the LLM may see of a page: main text of the sanitized HTML, scrubbed again."""
+    clean = guard.sanitize_html(raw)
+    return guard.scrub_text(extract_main_text(clean, url) or html_to_text(clean))
+
+
 async def _fetch(ctx: Context, kind: str, url: str, guessed: bool = False) -> SitePage:
     try:
-        page: Page = await ctx.fetcher.get_page(url)
+        result = await ctx.fetcher.get_text(url)
     except FetchStatusError as exc:
         return SitePage(kind=kind, url=url, status=exc.status, error=str(exc), guessed=guessed)
     except FetchError as exc:
         return SitePage(kind=kind, url=url, error=str(exc), guessed=guessed)
+    text = await asyncio.to_thread(llm_text, result.text, result.final_url)
     return SitePage(
         kind=kind,
         url=url,
-        final_url=page.result.final_url,
-        status=page.result.status,
-        text=page.text or html_to_text(page.result.text),
-        raw=page.result.text,
+        final_url=result.final_url,
+        status=result.status,
+        text=text,
+        raw=result.text,
         guessed=guessed,
     )
 
@@ -181,34 +165,25 @@ def copyright_fact(home: SitePage, n: int, today: datetime) -> Fact | None:
         quote=quote.strip(),
         source_kind=SourceKind.VENDOR,
         fetched_at=today,
+        topic="copyright",
+        is_filler=True,
     )
 
 
-def injection_facts(pages: list[SitePage], start: int, today: datetime) -> list[Fact]:
+def injection_facts(pages: list[SitePage], today: datetime) -> list[Fact]:
+    """Guard hits on any fetched page (hard flags, collector 'guard'). The same text in the same
+    channel on several pages (a shared footer) is one fact, on the first page found."""
     facts: list[Fact] = []
+    seen: set[tuple[str, str]] = set()
     for page in pages:
-        text = html_to_text(page.raw) if page.raw else page.text
-        match = _INJECTION.search(text)
-        if not match:
+        if not page.raw:
             continue
-        lo = max(0, match.start() - INJECTION_CONTEXT_CHARS // 2)
-        quote = text[lo : match.end() + INJECTION_CONTEXT_CHARS // 2].strip()
-        facts.append(
-            Fact(
-                id=fact_id("site", start + len(facts)),
-                collector="site_reader",
-                statement=f"A page on the vendor's site contains text addressed to AI systems: "
-                f'"{truncate(match.group(0), 80)}"',
-                axis=Axis.TRUST,
-                polarity=Polarity.NEGATIVE,
-                weight=0.9,
-                source_url=page.final_url or page.url,
-                quote=quote,
-                source_kind=SourceKind.VENDOR,
-                fetched_at=today,
-                is_hard_flag=True,
-            )
-        )
+        found, hits = guard.hit_facts(page.final_url or page.url, page.raw, today, len(facts))
+        for fact, hit in zip(found, hits, strict=True):
+            key = (hit.channel, hit.match.lower())
+            if key not in seen:
+                seen.add(key)
+                facts.append(fact.model_copy(update={"id": f"guard-{len(facts)}"}))
     return facts
 
 
@@ -230,6 +205,7 @@ def missing_page_facts(pages: list[SitePage], start: int, today: datetime) -> li
                     quote="",
                     source_kind=SourceKind.VENDOR,
                     fetched_at=today,
+                    topic="missing_page",
                 )
             )
     return facts
@@ -246,11 +222,17 @@ def _llm_input(pages: list[SitePage]) -> str:
         parts.append(
             f'<page url="{page.final_url or page.url}" kind="{page.kind}">\n{chunk}\n</page>'
         )
-    return "<data>\n" + "\n".join(parts) + "\n</data>"
+    return untrusted("\n".join(parts))
+
+
+# Pages about other companies or products: a founding year there is rarely the vendor's own.
+NOT_ABOUT_VENDOR_KINDS = frozenset({"blog", "customers", "changelog", "docs"})
 
 
 def validate_claims(raw: list[_ClaimOut], pages: list[SitePage]) -> tuple[list[Claim], int]:
-    """Keep claims whose quote really appears on the page they cite (or any fetched page)."""
+    """Keep claims whose quote really appears on the page they cite (or any fetched page).
+    Founding-year claims from blog, customer, changelog or docs pages are dropped: those
+    pages describe customers and partners as often as the vendor."""
     by_url = {p.final_url or p.url: p for p in pages} | {p.url: p for p in pages}
     kept: list[Claim] = []
     dropped = 0
@@ -265,7 +247,7 @@ def validate_claims(raw: list[_ClaimOut], pages: list[SitePage]) -> tuple[list[C
             ),
             None,
         )
-        if home is None:
+        if home is None or (c.type == "founded_year" and home.kind in NOT_ABOUT_VENDOR_KINDS):
             dropped += 1
             continue
         kept.append(
@@ -294,8 +276,8 @@ async def read_site(ctx: Context) -> SiteReport:
     cf = copyright_fact(home, 1, today)
     if cf:
         facts.append(cf)
-    facts += injection_facts(pages, len(facts) + 1, today)
     facts += missing_page_facts(others, len(facts) + 1, today)
+    facts += injection_facts(pages, today)
 
     readable = [p for p in pages if p.text]
     out = await ctx.llm.structured(

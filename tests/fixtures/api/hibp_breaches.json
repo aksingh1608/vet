@@ -1,0 +1,8 @@
+[
+  {"Name": "Ledgerly", "Title": "Ledgerly", "Domain": "ledgerly.example", "BreachDate": "2023-03-14",
+   "AddedDate": "2023-05-01T10:00:00Z", "PwnCount": 2400000,
+   "DataClasses": ["Email addresses", "Names", "Passwords"], "IsVerified": true},
+  {"Name": "LedgerlyForum", "Title": "Ledgerly Forum", "Domain": "ledgerly.example",
+   "BreachDate": "2012-08-01", "AddedDate": "2016-01-01T00:00:00Z", "PwnCount": 1200,
+   "DataClasses": ["Email addresses", "Usernames"], "IsVerified": true}
+]

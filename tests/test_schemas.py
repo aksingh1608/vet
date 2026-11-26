@@ -8,6 +8,7 @@ from vet.schemas import (
     Claim,
     ClaimCheck,
     Fact,
+    Finding,
     Polarity,
     RealAlive,
     Reason,
@@ -55,7 +56,14 @@ def make_verdict(n_reasons: int = 4) -> Verdict:
         confidence=0.7,
         summary="Real product, but a 2023 breach is not disclosed.",
         reasons=[make_reason(i) for i in range(n_reasons)],
-        findings=["Claims founding in 2012; earliest record is 2024."],
+        findings=[
+            Finding(
+                text="The site says the company was founded in 2012; the domain was "
+                "registered on 2024-03-01",
+                source_url="https://example.com/about",
+                fact_id="claims_check-0",
+            )
+        ],
         run_id="run-1",
         git_sha="abc123",
         model="claude-opus-5-5",
