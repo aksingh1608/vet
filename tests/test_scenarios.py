@@ -245,3 +245,71 @@ def test_weak_evidence_alone_cannot_raise_trust() -> None:
                                       (Polarity.POSITIVE, 0.5)), pr_wire], today=NOW)  # fmt: skip
     assert rules.scores["trust_pos"] == 0.0
     assert Trust.TRUST not in rules.allowed_trust
+
+
+# ---- mid-age tier: 2 to 10 years of history ---------------------------------------------------
+
+
+def mid_age(years: float, sources: list[tuple[str, dict[str, object]]]) -> list[Fact]:
+    """Age records `years` old plus one positive independent fact per (url, extra fields)."""
+    facts = age_records("mid.example", NOW - timedelta(days=round(years * 365.25)),
+                        (Polarity.POSITIVE, 0.4))  # fmt: skip
+    for i, (url, extra) in enumerate(sources):
+        facts.append(fact(f"footprint-{i}", "footprint", Axis.TRUST, Polarity.POSITIVE, 0.4,
+                          source_kind=SourceKind.INDEPENDENT, source_url=url,
+                          **{"source_type": "press", "topic": "news", **extra}))  # fmt: skip
+    return facts
+
+
+STRONG_THREE = [
+    ("https://www.heise.de/news/mid-1", {}),
+    ("https://www.ft.com/content/mid-2", {}),
+    ("https://www.g2.com/products/mid/reviews",
+     {"source_type": "review", "topic": "reviews", "quote": "Mid has 214 reviews on G2"}),
+]  # fmt: skip
+
+
+@pytest.mark.parametrize("name", JUDGES)
+async def test_mid_age_vendor_with_three_strong_sources_is_trusted(name: str) -> None:
+    facts = mid_age(6, STRONG_THREE)
+    rules = apply_rules(facts, today=NOW)
+    assert rules.scores["mid_age_tier"] == 1.0 and rules.allowed_trust == [Trust.TRUST]
+    result = await judge(JUDGES[name], [], facts)
+    assert result.trust == Trust.TRUST
+    assert any("mid-age tier" in n for n in result.notes)
+
+
+def test_mid_age_tier_needs_three_distinct_sites() -> None:
+    two_sites = [*STRONG_THREE[:2], ("https://www.heise.de/news/mid-3", {})]
+    rules = apply_rules(mid_age(6, two_sites), today=NOW)
+    assert rules.scores["strong_sources"] == 2.0 and rules.scores["mid_age_tier"] == 0.0
+
+
+def test_mid_age_tier_is_blocked_by_a_contradiction() -> None:
+    contradiction = fact("claims-0", "claims_check", Axis.TRUST, Polarity.NEGATIVE, 0.6,
+                         topic="contradicted_claim", is_hard_flag=True)  # fmt: skip
+    rules = apply_rules([*mid_age(6, STRONG_THREE), contradiction], today=NOW)
+    assert rules.scores["mid_age_tier"] == 0.0 and Trust.TRUST not in rules.allowed_trust
+
+
+@pytest.mark.parametrize("name", JUDGES)
+async def test_under_two_years_stays_capped_at_caution(name: str) -> None:
+    facts = mid_age(1.5, STRONG_THREE)
+    result = await judge(JUDGES[name], [], facts)
+    assert result.trust == Trust.CAUTION
+    assert apply_rules(facts, today=NOW).scores["mid_age_tier"] == 0.0
+
+
+@pytest.mark.parametrize("name", JUDGES)
+async def test_mid_age_vendor_with_only_weak_sources_is_not_trusted(name: str) -> None:
+    weak = [
+        ("https://www.producthunt.com/products/mid", {"source_type": "other"}),
+        ("https://www.saashub.com/mid", {"source_type": "directory", "topic": "directory"}),
+        ("https://alternativeto.net/software/mid/", {"source_type": "other"}),
+        ("https://www.prnewswire.com/news-releases/mid", {}),
+    ]
+    facts = mid_age(6, weak)
+    rules = apply_rules(facts, today=NOW)
+    assert rules.scores["strong_sources"] == 0.0 and Trust.TRUST not in rules.allowed_trust
+    result = await judge(JUDGES[name], [], facts)
+    assert result.trust != Trust.TRUST

@@ -19,9 +19,12 @@ Selection (``select_reasons``, deterministic):
 * At least one real_alive and one trust reason when a verified fact exists for each.
 * Filler (copyright year, directory listings, site looks) only when nothing better exists.
 
-* If no verified trust fact is left for the trust axis but an old, disclosed breach was kept as
-  a finding, that breach becomes the trust reason (as the record states it, plus the
-  disclosure when a disclosure source verified). The verdict does not change.
+* Trust axis coverage always holds. With no verified trust fact, the trust reason is the first
+  of: an old, disclosed breach kept as a finding (as the record states it, plus the disclosure
+  when a disclosure source verified); a company-register record; an established review
+  platform with a real review count; an independent press mention; and last a sentence
+  stating the evidence floor (domain history, independent sources, hard flags), linked to the
+  domain record. The verdict does not change.
 
 Findings: verified, notable facts that did not make the reasons (neither the fact nor the same
 event), ranked by strength: contradictions first, then hard flags, breaches and other real
@@ -41,7 +44,14 @@ from pydantic import BaseModel
 from vet import trace
 from vet.config import API_HOSTS, Settings
 from vet.fetch import Fetcher, FetchError, FetchResult, FetchStatusError, host_matches, host_of
-from vet.judge import is_breach, is_forced, is_real_negative
+from vet.judge import (
+    AGE_EVIDENCE_TOPICS,
+    history_years,
+    independent_positive_sources,
+    is_breach,
+    is_forced,
+    is_real_negative,
+)
 from vet.llm import LLMError, StructuredLLM, load_prompt, untrusted
 from vet.schemas import (
     MAX_REASONS,
@@ -53,7 +63,7 @@ from vet.schemas import (
     Reason,
     SourceKind,
 )
-from vet.sources import REPUTABLE_TYPES
+from vet.sources import MIN_REAL_REVIEWS, REPUTABLE_TYPES, REVIEW_SITE_NAMES, review_count
 from vet.text import contains_quote, registered_domain
 
 logger = logging.getLogger(__name__)
@@ -327,12 +337,29 @@ class _Pick:
     forced: bool
 
 
+def _trust_fallback(picks: list[_Pick], chain: list[Reason]) -> tuple[Reason | None, bool]:
+    """The first usable trust fallback, and whether it was applied in place: a fact that is
+    already a real_alive reason moves to the trust axis when real_alive keeps another reason."""
+    for r in chain:
+        if r.text.startswith(FLOOR_PREFIX):
+            return r, False
+        same = [i for i, p in enumerate(picks) if p.reason.fact_id == r.fact_id]
+        if not same:
+            return r, False
+        i = same[0]
+        axis = picks[i].reason.axis
+        if sum(1 for p in picks if p.reason.axis == axis) > 1:
+            picks[i] = _Pick(r, picks[i].collector, picks[i].forced)
+            return r, True
+    return None, False
+
+
 def select_reasons(
     ranked: list[Fact],
     passed: set[str],
     domain: str = "",
     finding_only: frozenset[str] = frozenset(),
-    trust_fallback: Reason | None = None,
+    trust_fallbacks: list[Reason] | None = None,
 ) -> tuple[list[Reason], list[str]]:
     """Pick 4-7 reasons from verified facts in rank order. Pure and deterministic. Facts in
     ``finding_only`` (old, disclosed breaches at a trusted vendor) are never reasons."""
@@ -425,15 +452,25 @@ def select_reasons(
             ),
             None,
         )
-        if spare is None and axis == Axis.TRUST and trust_fallback is not None:
-            fallback = _Pick(trust_fallback, "risk", False)
-            unforced = [i for i, p in enumerate(picks) if not p.forced]
-            if len(picks) < MAX_REASONS:
-                picks.append(fallback)
-            elif unforced:
-                picks[unforced[-1]] = fallback  # replaces the weakest unforced reason
-            notes.append(f"finding-only breach {trust_fallback.fact_id} used as the trust reason")
-            continue
+        if spare is None and axis == Axis.TRUST:
+            fallback, moved = _trust_fallback(picks, trust_fallbacks or [])
+            if moved and fallback is not None:
+                notes.append(f"reason {fallback.fact_id} moved to the trust axis")
+                continue
+            if fallback is not None:
+                if len(picks) < MAX_REASONS:
+                    picks.append(_Pick(fallback, "fallback", False))
+                else:  # replace the lowest unforced reason on an axis that keeps another
+                    for i in range(len(picks) - 1, -1, -1):
+                        p = picks[i]
+                        same_axis = sum(1 for q in picks if q.reason.axis == p.reason.axis)
+                        if not p.forced and same_axis > 1:
+                            picks[i] = _Pick(fallback, "fallback", False)
+                            break
+                notes.append(
+                    f"fallback {fallback.fact_id} used as the trust reason: {fallback.text[:60]}"
+                )
+                continue
         if spare is None:
             notes.append(f"no verified {axis} fact: axis not covered")
             continue
@@ -574,6 +611,77 @@ def breach_reason(
     )
 
 
+FLOOR_PREFIX = "Evidence behind the trust call:"
+
+
+def _as_trust(fact: Fact) -> Reason:
+    return reason_from(fact).model_copy(update={"axis": Axis.TRUST})
+
+
+def floor_reason(facts: dict[str, Fact], passed: set[str]) -> Reason | None:
+    """A sentence stating the evidence floor, from verified facts only, linked to the domain
+    record (RDAP lookup first). None without a verified domain-age record."""
+    verified = [f for f in facts.values() if f.id in passed]
+    age = {f.topic: f for f in verified if f.collector == AGE and f.observed_at}
+    link = next((age[t] for t in AGE_LINK_PRIORITY if t in age), None)
+    if link is None:
+        return None
+    years = history_years(verified, max(f.fetched_at for f in verified))
+    # Same records as history_years (capture_history is dated by year only).
+    since = min(
+        (f.observed_at for f in age.values() if f.topic in AGE_EVIDENCE_TOPICS and f.observed_at),
+        default=link.observed_at,
+    )
+    sources = len(independent_positive_sources(verified))
+    hard = sum(1 for f in verified if f.is_hard_flag or f.topic == "contradicted_claim")
+    flags = (
+        f"{hard} hard flag(s) or contradiction(s)" if hard else "no hard flags or contradictions"
+    )
+    return Reason(
+        text=f"{FLOOR_PREFIX} {years:g} year{'' if years == 1 else 's'} of domain history "
+        f"(since {since.date().isoformat()}), {sources} verified independent source(s), {flags}",
+        axis=Axis.TRUST,
+        polarity=Polarity.NEUTRAL,
+        source_url=link.source_url,
+        quote=link.quote,
+        fact_id=link.id,
+    )
+
+
+def trust_reason_chain(
+    facts: dict[str, Fact],
+    passed: set[str],
+    finding_only: frozenset[str] = frozenset(),
+    breach: Reason | None = None,
+) -> list[Reason]:
+    """Trust reasons to use, in order, when no verified trust fact made the reasons: an old
+    disclosed breach, a register record, a review platform with a real review count, an
+    independent press mention, then the evidence-floor sentence."""
+    ok = [
+        f
+        for f in facts.values()
+        if f.id in passed and f.id not in finding_only and f.polarity != Polarity.NEGATIVE
+    ]
+    register = [f for f in ok if f.collector == "legal_id" and f.source_kind == SourceKind.RECORD]
+    reviews = sorted(
+        (
+            f
+            for f in ok
+            if registered_domain(f.source_url) in REVIEW_SITE_NAMES
+            and review_count(f.quote) >= MIN_REAL_REVIEWS
+        ),
+        key=lambda f: -review_count(f.quote),
+    )
+    press = sorted(
+        (f for f in ok if f.source_type == "press" and f.source_kind == SourceKind.INDEPENDENT),
+        key=lambda f: (-f.weight, f.id),
+    )
+    chain = [breach] if breach else []
+    chain += [_as_trust(f) for f in (*register, *reviews, *press)]
+    floor = floor_reason(facts, passed)
+    return chain + ([floor] if floor else [])
+
+
 def used_by_reasons(
     reasons: list[Reason], facts: dict[str, Fact], passed: set[str], finding_only: frozenset[str]
 ) -> frozenset[str]:
@@ -633,8 +741,10 @@ async def verify_and_select(
     ranked = [by_id.get(f.id, f) for f in ranked]
     apply_dependencies(by_id, results)
     passed = {fid for fid, r in results.items() if r.passed}
-    fallback = breach_reason(finding_only, by_id, passed)
-    reasons, notes = select_reasons(ranked, passed, domain, finding_only, fallback)
+    chain = trust_reason_chain(
+        by_id, passed, finding_only, breach_reason(finding_only, by_id, passed)
+    )
+    reasons, notes = select_reasons(ranked, passed, domain, finding_only, chain)
 
     remaining = [f for f in ranked if f.id not in results]
     while len(reasons) < MIN_REASONS and remaining:
@@ -645,8 +755,10 @@ async def verify_and_select(
         ranked = [by_id.get(f.id, f) for f in ranked]
         apply_dependencies(by_id, results)
         passed = {fid for fid, r in results.items() if r.passed}
-        fallback = breach_reason(finding_only, by_id, passed)
-        reasons, notes = select_reasons(ranked, passed, domain, finding_only, fallback)
+        chain = trust_reason_chain(
+            by_id, passed, finding_only, breach_reason(finding_only, by_id, passed)
+        )
+        reasons, notes = select_reasons(ranked, passed, domain, finding_only, chain)
 
     used = used_by_reasons(reasons, by_id, passed, finding_only)
     findings, finding_notes = select_findings(finding_ids, by_id, passed, used)
