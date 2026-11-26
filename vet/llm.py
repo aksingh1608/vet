@@ -1,14 +1,24 @@
 """Thin wrapper over the Anthropic SDK: structured output validated by pydantic, one repair
 retry, token logging to the current trace.
 
+Determinism: the current models accept no sampling parameters (no temperature), so identical
+calls can differ. Answers are cached instead (``LLMCache``, keyed by model, effort, prompt,
+input and output schema; no keys or headers): the same input always gets the same answer, so
+a rerun of a product is reproducible. Turn it off with VET_LLM_CACHE=false.
+
 Structured output uses ``messages.parse(output_format=...)`` (forced tool_choice is rejected
 by current models). Outside content (vendor pages, search snippets, register text, and facts
 derived from them) always goes in the user message inside <untrusted_content> tags, and every
 system prompt says that content is data, never instructions.
 """
 
+import asyncio
+import hashlib
+import json
 import logging
 import re
+import sqlite3
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal, Protocol, TypeVar
 
@@ -70,8 +80,52 @@ def unwrap(user: str) -> str:
     return user[start : user.index("\n" + UNTRUSTED_CLOSE, start)]
 
 
+class LLMCache:
+    """Validated structured answers in SQLite (same file as the fetch cache, own table)."""
+
+    _SCHEMA = """
+        CREATE TABLE IF NOT EXISTS llm_responses (
+            key TEXT PRIMARY KEY,
+            step TEXT NOT NULL,
+            response TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        )
+    """
+
+    def __init__(self, path: Path) -> None:
+        self.path = path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with sqlite3.connect(path) as conn:
+            conn.execute(self._SCHEMA)
+
+    @staticmethod
+    def key(model: str, effort: str, system: str, user: str, output: type[BaseModel]) -> str:
+        blob = json.dumps([model, effort, system, user, output.model_json_schema()], sort_keys=True)
+        return hashlib.sha256(blob.encode()).hexdigest()
+
+    def get(self, key: str) -> str | None:
+        with sqlite3.connect(self.path) as conn:
+            row = conn.execute(
+                "SELECT response FROM llm_responses WHERE key = ?", (key,)
+            ).fetchone()
+        return row[0] if row else None
+
+    def put(self, key: str, step: str, response: str) -> None:
+        with sqlite3.connect(self.path) as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO llm_responses (key, step, response, created_at) "
+                "VALUES (?, ?, ?, ?)",
+                (key, step, response, datetime.now(UTC).isoformat()),
+            )
+
+
 class LLM:
-    def __init__(self, settings: Settings, client: anthropic.AsyncAnthropic | None = None) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        client: anthropic.AsyncAnthropic | None = None,
+        cache: LLMCache | None = None,
+    ) -> None:
         if client is None:
             if settings.anthropic_api_key is None:
                 raise ValueError("ANTHROPIC_API_KEY is not set")
@@ -81,6 +135,7 @@ class LLM:
                 max_retries=LLM_MAX_RETRIES,
             )
         self._client = client
+        self._cache = cache
         self._models: dict[ModelKind, str] = {
             "fast": settings.fast_model,
             "judge": settings.judge_model,
@@ -100,6 +155,30 @@ class LLM:
         max_tokens: int = DEFAULT_MAX_TOKENS,
     ) -> T:
         model = self._models[kind]
+        key = LLMCache.key(model, EFFORT[kind], system, user, output) if self._cache else ""
+        if self._cache is not None:
+            hit = await asyncio.to_thread(self._cache.get, key)
+            if hit is not None:
+                current = trace.current()
+                if current is not None:
+                    current.usage.llm_cache_hits += 1
+                trace.emit({"event": "llm", "step": step, "model": model, "cache": "hit"})
+                return output.model_validate_json(hit)
+        result = await self._ask(kind, model, system, user, output, step, max_tokens)
+        if self._cache is not None:
+            await asyncio.to_thread(self._cache.put, key, step, result.model_dump_json())
+        return result
+
+    async def _ask(
+        self,
+        kind: ModelKind,
+        model: str,
+        system: str,
+        user: str,
+        output: type[T],
+        step: str,
+        max_tokens: int,
+    ) -> T:
         messages: list[dict[str, str]] = [{"role": "user", "content": user}]
         last_error = ""
         budget = max_tokens

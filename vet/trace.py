@@ -15,6 +15,7 @@ class Usage(BaseModel):
     llm_input_tokens: int = 0
     llm_output_tokens: int = 0
     llm_calls: int = 0
+    llm_cache_hits: int = 0
     tavily_searches: int = 0
     tavily_cache_hits: int = 0
     tavily_credits: int = 0

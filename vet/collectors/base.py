@@ -31,6 +31,7 @@ class SitePage(BaseModel):
     raw: str = ""  # raw HTML (kept for quote checks, never sent to the LLM)
     error: str = ""
     guessed: bool = False  # a fallback path we tried, not a link the site shows
+    archived: str = ""  # capture date (YYYY-MM-DD) when this is a Wayback copy of a blocked page
 
 
 class SiteIdentity(BaseModel):

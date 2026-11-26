@@ -317,3 +317,16 @@ def test_finding_only_breach_becomes_the_trust_reason_when_nothing_else_covers_t
     assert {"risk-0", "risk-11"} <= used
     findings, _ = select_findings(["risk-0", "risk-11"], facts, set(facts), used)
     assert not {"risk-0", "risk-11"} & {f.fact_id for f in findings}
+
+
+def test_two_reports_of_the_same_event_are_one_reason() -> None:
+    from datetime import UTC, datetime
+
+    when = datetime(2019, 5, 24, tzinfo=UTC)
+    record = neg("risk-0", "risk", "breach", "https://haveibeenpwned.com/PwnedWebsites#X",
+                 source_kind=SourceKind.RECORD, observed_at=when)  # fmt: skip
+    page = neg("risk-10", "risk", "breach", "https://haveibeenpwned.com/Breach/X",
+               source_kind=SourceKind.RECORD, observed_at=when.replace(month=1, day=1))  # fmt: skip
+    ranked = [record, page, *age_facts(), fact("fp-0", "footprint")]  # 3 collectors: relaxed
+    reasons, _ = select_reasons(ranked, {f.id for f in ranked}, "x.example")
+    assert [r.fact_id for r in reasons].count("risk-10") == 0

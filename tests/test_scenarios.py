@@ -208,3 +208,40 @@ def test_new_domain_with_any_positive_evidence_is_not_hollow() -> None:
     rules = apply_rules([*facts, *new, review], today=NOW)
     assert rules.scores["hollow"] == 0.0
     assert Trust.DO_NOT_TRUST not in rules.allowed_trust  # no red flag: never do_not_trust
+
+
+@pytest.mark.parametrize("name", JUDGES)
+async def test_hollow_vendor_with_launch_and_directory_listings_is_still_hollow(name: str) -> None:
+    """Weak evidence (a Product Hunt page, link directories) cannot block the hollow rule."""
+    claims, facts = hollow()
+    weak = [
+        fact("footprint-0", "footprint", Axis.REAL_ALIVE, Polarity.POSITIVE, 0.3,
+             topic="news", source_kind=SourceKind.INDEPENDENT, source_type="other",
+             source_url="https://www.producthunt.com/products/hollow"),
+        fact("footprint-1", "footprint", Axis.REAL_ALIVE, Polarity.NEUTRAL, 0.1,
+             topic="directory", is_filler=True, source_kind=SourceKind.INDEPENDENT,
+             source_url="https://startupbase.example/hollow"),
+        fact("footprint-2", "footprint", Axis.TRUST, Polarity.POSITIVE, 0.3,
+             topic="directory", is_filler=True, source_kind=SourceKind.INDEPENDENT,
+             source_url="https://saas-list.example/hollow"),
+    ]  # fmt: skip
+    checks, new = check_claims(claims, facts, "hollow.example", {"hollow"}, NOW)
+    result = await judge(JUDGES[name], claims, facts + weak + new, checks)
+    assert (result.real_alive, result.trust) == (RealAlive.NO, Trust.DO_NOT_TRUST)
+
+
+def test_weak_evidence_alone_cannot_raise_trust() -> None:
+    from vet.sources import evidence_class
+
+    pr_wire = fact("footprint-0", "footprint", Axis.TRUST, Polarity.POSITIVE, 0.9,
+                   source_kind=SourceKind.INDEPENDENT,
+                   source_url="https://www.prnewswire.com/news-releases/x")  # fmt: skip
+    review = fact("footprint-1", "footprint", Axis.REAL_ALIVE, Polarity.POSITIVE, 0.5,
+                  topic="reviews", source_kind=SourceKind.INDEPENDENT,
+                  source_url="https://www.trustpilot.com/review/x.example",
+                  quote="Looking at 5,420 reviews, reviewers had a great experience")  # fmt: skip
+    assert evidence_class(pr_wire) == "weak" and evidence_class(review) == "strong"
+    rules = apply_rules([*age_records("x.example", datetime(2010, 1, 1, tzinfo=UTC),
+                                      (Polarity.POSITIVE, 0.5)), pr_wire], today=NOW)  # fmt: skip
+    assert rules.scores["trust_pos"] == 0.0
+    assert Trust.TRUST not in rules.allowed_trust

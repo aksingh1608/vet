@@ -6,6 +6,7 @@ records, reputable press, regulators and courts, and the vendor's own negative s
 
 import re
 
+from vet.schemas import Fact, SourceKind
 from vet.text import registered_domain
 
 # Publishers whose single report may stand as a finding.
@@ -115,3 +116,98 @@ def review_statement(url: str, quote: str) -> str:
     if word:
         parts.append(f"overall rating '{word.group(1).capitalize()}'")
     return f"{site_name(url)}: " + ", ".join(parts)
+
+
+# ---- evidence quality ------------------------------------------------------------------------
+
+# Launch sites and "submit your tool" lists: anyone can be listed in an afternoon.
+LAUNCH_SITES = frozenset(
+    {
+        "producthunt.com",
+        "betalist.com",
+        "launchingnext.com",
+        "saashub.com",
+        "alternativeto.net",
+        "theresanaiforthat.com",
+        "futuretools.io",
+        "huntscreens.com",
+        "productcool.com",
+        "microlaunch.net",
+        "uneed.best",
+        "peerlist.io",
+        "toolify.ai",
+        "indiehackers.com",
+    }
+)
+# Paid press-release distribution: the vendor writes it.
+PR_WIRES = frozenset(
+    {
+        "prnewswire.com",
+        "businesswire.com",
+        "globenewswire.com",
+        "einpresswire.com",
+        "openpr.com",
+        "prweb.com",
+        "accessnewswire.com",
+        "newswire.com",
+        "prlog.org",
+    }
+)
+MIN_REAL_REVIEWS = 10
+
+
+def review_count(quote: str) -> int:
+    m = _COUNT.search(quote)
+    return int(re.sub(r"[,.]", "", m.group(1))) if m else 0
+
+
+def evidence_class(fact: Fact) -> str:
+    """strong: records, independent press/regulators/courts, customers naming the vendor,
+    established review platforms with a real review count. weak: launch sites, link
+    directories, paid PR wires, social media (including the vendor's own accounts), activity the
+    vendor controls (its own pages, its GitHub/package releases). normal: everything else."""
+    domain = registered_domain(fact.source_url)
+    if (
+        fact.source_kind == SourceKind.VENDOR
+        or fact.collector == "alive"
+        or domain in LAUNCH_SITES
+        or domain in PR_WIRES
+        or fact.topic == "directory"
+        or fact.is_filler
+        or fact.source_type in ("social", "directory")
+    ):
+        return "weak"
+    if fact.source_kind == SourceKind.RECORD or fact.source_type in REPUTABLE_TYPES:
+        return "strong"
+    if fact.topic == "customer":
+        return "strong"
+    if domain in REVIEW_SITE_NAMES and review_count(fact.quote) >= MIN_REAL_REVIEWS:
+        return "strong"
+    return "normal"
+
+
+# ---- entity matching for negatives -----------------------------------------------------------
+
+
+def names_entity(text: str, domain: str, names: set[str], *, own_site: bool = False) -> bool:
+    """True when the text names the exact product or domain being judged. A sister domain
+    with the same label (cal.eu when judging cal.com) does not count, and neither does a
+    different company (a parent, a subsidiary, a namesake). On the vendor's own site a page
+    speaks about the vendor without naming it, so only the sister-brand check applies."""
+    low = text.lower()
+    label = domain.split(".")[0].lower()
+    sister = re.search(
+        rf"(?<![\w.]){re.escape(label)}\.(?!{re.escape(domain.split('.', 1)[1])}\b)[a-z]{{2,}}\b",
+        low,
+    )
+    if sister:
+        return False
+    if own_site or domain.lower() in low:
+        return True
+    for name in names:
+        n = name.strip().lower()
+        if len(n) < 3:
+            continue
+        if re.search(rf"(?<![\w.]){re.escape(n)}(?![\w]|\.[a-z])", low):
+            return True
+    return False

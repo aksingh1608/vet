@@ -105,7 +105,7 @@ async def test_corroborated_or_vendor_announced_events_can_be_hard_flags(router_
         ("https://other.example/x", "Ledger Farms, a dairy, was acquired."),
     )
     items = [
-        item("https://heise.de/a", "breach", "Kundendaten abgeflossen"),
+        item("https://heise.de/a", "breach", "Bei Ledgerly sind Kundendaten abgeflossen"),
         item("https://golem.de/b", "breach", "Ledgerly bestätigt Datenleck"),
         item(
             "https://ledgerly.example/blog/goodbye",
@@ -155,12 +155,14 @@ async def test_one_reputable_press_report_is_enough_and_disclosure_is_tagged(
     async with fetcher:
         ctx = make_ctx(fetcher, FakeLLM(), tavily=False)
     seen = results(
-        ("https://mashable.com/a", "Mozilla is shutting down Pocket on July 8, 2025."),
+        ("https://mashable.com/a", "Mozilla is shutting down Ledgerly on July 8, 2025."),
         ("https://www.linkedin.com/posts/x", "Ledgerly confirmed a breach in 2023, they said."),
         ("https://techcrunch.com/b", "Ledgerly notified customers of a 2023 breach."),
     )
     items = [
-        item("https://mashable.com/a", "discontinued", "shutting down Pocket", source_type="press"),
+        item(
+            "https://mashable.com/a", "discontinued", "shutting down Ledgerly", source_type="press"
+        ),
         item(  # a LinkedIn post is social, whatever the classifier says
             "https://www.linkedin.com/posts/x",
             "breach",
@@ -182,3 +184,52 @@ async def test_one_reputable_press_report_is_enough_and_disclosure_is_tagged(
     assert facts["https://www.linkedin.com/posts/x"].source_type == "social"
     notice = facts["https://techcrunch.com/b"]
     assert notice.tags == ["disclosed"] and notice.observed_at.year == 2023
+
+
+async def test_negatives_about_sister_brands_or_other_companies_are_ignored(router_fetcher) -> None:
+    """The Cal.eu and Affinity cases: a sister service and a subsidiary shutting down are not
+    the product being judged shutting down."""
+    fetcher, _ = router_fetcher([])
+    async with fetcher:
+        cal = Context(
+            url="https://cal.com/", domain="cal.com", settings=fetcher.settings,
+            fetcher=fetcher, llm=FakeLLM(), tavily=None,
+            identity=SiteIdentity(vendor_name="Cal.com"),
+        )  # fmt: skip
+        canva = Context(
+            url="https://www.canva.com/", domain="canva.com", settings=fetcher.settings,
+            fetcher=fetcher, llm=FakeLLM(), tavily=None,
+            identity=SiteIdentity(vendor_name="Canva"),
+        )  # fmt: skip
+    cal_eu = results(("https://dev.to/x", "Heads up: Cal.eu closes on November 1, 2026."))
+    facts = news_facts_from(
+        [item("https://dev.to/x", "discontinued", "Cal.eu closes on November 1, 2026",
+              source_type="press")],
+        cal_eu, cal, NOW, 10,
+    )  # fmt: skip
+    assert facts == []
+    affinity = results(
+        ("https://dpreview.com/a", "Affinity's website no longer sells the desktop versions.")
+    )
+    facts = news_facts_from(
+        [item("https://dpreview.com/a", "discontinued",
+              "Affinity's website no longer sells the desktop versions", source_type="press")],
+        affinity, canva, NOW, 10,
+    )  # fmt: skip
+    assert facts == []
+    own = results(("https://cal.com/blog/x", "Cal.com will shut down on 1 March 2027."))
+    facts = news_facts_from(
+        [item("https://cal.com/blog/x", "discontinued", "Cal.com will shut down on 1 March 2027",
+              independent=False)],
+        own, cal, NOW, 10,
+    )  # fmt: skip
+    assert [f.topic for f in facts] == ["discontinued"]  # the product itself: kept
+
+
+def test_vendors_own_breach_notice_counts_without_naming_itself() -> None:
+    from vet.sources import names_entity
+
+    notice = "We detected a malicious attack on our systems on 24 May 2019."
+    assert names_entity(notice, "canva.com", {"Canva"}, own_site=True)
+    assert not names_entity(notice, "canva.com", {"Canva"})  # a third party must name it
+    assert not names_entity("Cal.eu closes on 1 Nov", "cal.com", {"Cal.com"}, own_site=True)

@@ -19,6 +19,8 @@ Nothing else goes in this section. DEFENCE.md cites only this section.
 | 2026-11-26 | feat/phase-4b-hollow | `live_check` | — | vet/judge.py, vet/verify.py, vet/cli.py | — | clean | 0 issues. New tests left to the Norma GitHub App check on PR #5. |
 | 2026-11-26 | feat/phase-4b-hollow | `live_check` | py-maint-else-after-return | vet/collectors/classify.py:75 | HIGH | fixed | Redundant `else` after `raise` in the chunk loop; restructured with an early `continue`. Re-check clean. |
 | 2026-11-26 | feat/phase-4b-hollow | `live_check` | — | vet/llm.py, vet/collectors/footprint.py, vet/collectors/risk.py | — | clean | 0 issues (rehearsal fixes: retry cut-off structured output; classify search results in chunks). |
+| 2026-11-26 | feat/phase-4b-hollow (PR #5) | Norma GitHub App PR check | — | files changed by PR #5 | — | clean | "No issues introduced by your changes." [Report](https://norma.qualityclouds.com/projects/12410) |
+| 2026-11-26 | feat/phase-4c-hardening | `live_check` (python, secrets, fastapi, sqlalchemy rulesets) | — | 11 changed source/config files: vet/sources.py, llm.py, site_reader.py, judge.py, verify.py, config.py, orchestrator.py, trace.py, collectors/base.py, collectors/risk.py, collectors/footprint.py | — | clean | 0 issues. `.env.example`: `not_checkable`. The prompt `vet/prompts/risk_results.md` (no applicable rules) and the changed/new test files were not sent (free plan); the Norma GitHub App check on PR #6 covers the tests. |
 
 ## Self-review notes (not Norma findings)
 

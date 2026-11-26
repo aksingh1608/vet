@@ -115,7 +115,7 @@ async def _load(fetcher: Fetcher, fact: Fact) -> FetchResult | None:
     cached = await fetcher.cached(url)
     if cached is not None:
         return cached
-    if fact.source_kind == SourceKind.RECORD and host_matches(host_of(url), API_HOSTS):
+    if host_matches(host_of(url), API_HOSTS):  # records, and Wayback copies of blocked pages
         return await fetcher.fetch_api(url)
     return await fetcher.get_text(url)
 
@@ -363,12 +363,21 @@ def select_reasons(
         notes.append(f"only {len(collectors)} collectors verified: diversity relaxed")
 
     picks: list[_Pick] = []
+    events: set[tuple[str, int]] = set()
 
     def used(collector: str) -> bool:
         return any(p.collector == collector for p in picks)
 
+    def repeats_event(fact: Fact) -> bool:
+        """A second report of an event already among the reasons (HIBP record + HIBP page)."""
+        event = _event(fact) if fact.collector != AGE else None
+        return event is not None and event in events
+
     def add(reason: Reason, collector: str, fact: Fact) -> None:
         picks.append(_Pick(reason, collector, is_forced(fact)))
+        event = _event(fact) if fact.collector != AGE else None
+        if event is not None:
+            events.add(event)
 
     # 1. Contradicted claims / founding-year gaps: always, regardless of diversity.
     for reason, collector, fact in candidates:
@@ -378,14 +387,23 @@ def select_reasons(
     for reason, collector, fact in candidates:
         if len(picks) >= MAX_REASONS:
             break
-        if not is_forced(fact) and not fact.is_filler and not used(collector):
+        if (
+            not is_forced(fact)
+            and not fact.is_filler
+            and not used(collector)
+            and not repeats_event(fact)
+        ):
             add(reason, collector, fact)
     # 3. Too few collectors: repeats allowed up to the minimum (still non-filler).
     if relaxed:
         for reason, collector, fact in candidates:
             if len(picks) >= MIN_REASONS:
                 break
-            if not fact.is_filler and reason not in [p.reason for p in picks]:
+            if (
+                not fact.is_filler
+                and reason not in [p.reason for p in picks]
+                and not repeats_event(fact)
+            ):
                 add(reason, collector, fact)
     # 4. Filler only when nothing better exists.
     for reason, collector, fact in candidates:

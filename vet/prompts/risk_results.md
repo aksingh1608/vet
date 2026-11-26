@@ -36,6 +36,6 @@ For each result, return:
   emails"). Write the quote first, then the statement FROM the quote: it may name the source
   and the date from the result, but must not contain any other fact that is not in the quote.
 - quote: an EXACT verbatim excerpt (5 to 40 words) from the result content that supports the
-  statement. Copy it character for character. "" if no excerpt supports it.
+  statement and names the product or company it is about. Copy it character for character. "" if no excerpt supports it.
 
 Mark results with no event about this vendor as event "none" and leave other fields minimal.

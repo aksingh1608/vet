@@ -5,6 +5,9 @@
 * Tavily news searches in English, plus German for German-speaking vendors. The fast model
   checks each result is about THIS company (not a namesake) and what event it reports.
 
+A negative event counts only if its quote names the exact product or domain: a sister brand
+(cal.eu when judging cal.com), a parent company or a subsidiary does not count.
+
 One report is enough when it comes from reputable press, a regulator or a court, or when the
 vendor itself announces the negative fact (shutdown, breach notice, acquisition). Anything else
 (social media, forums, blogs) needs a second independent site; until then it is never a hard
@@ -23,9 +26,9 @@ from pydantic import BaseModel
 
 from vet.collectors.base import Context, fact_id
 from vet.collectors.classify import classify_in_chunks
-from vet.collectors.footprint import search_name, vendor_payload
+from vet.collectors.footprint import entity_names, search_name, vendor_payload
 from vet.schemas import Axis, Fact, Polarity, SourceKind
-from vet.sources import REPUTABLE_TYPES, source_type_for
+from vet.sources import REPUTABLE_TYPES, names_entity, source_type_for
 from vet.tavily import TavilyResult
 from vet.text import contains_quote, registered_domain, same_site
 
@@ -160,6 +163,10 @@ def news_facts_from(
         own = same_site(item.url, ctx.domain)
         if not own and not item.independent:
             continue
+        if EVENT_RULES[item.event][1] == Polarity.NEGATIVE and not names_entity(
+            item.quote, ctx.domain, entity_names(ctx), own_site=own
+        ):
+            continue  # about a sister brand, a parent or a namesake, not this product
         kept.append((item, source, own))
 
     # Corroboration: distinct independent sites reporting the same kind of event.

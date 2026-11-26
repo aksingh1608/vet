@@ -18,7 +18,10 @@
    * hollow pattern (records < 1 year old + founding year claimed far earlier + a checkable dead
      page or contradiction + no positive record or independent evidence) -> "no" and
      "do_not_trust". The absence of evidence only gates the pattern; it is never a reason;
-   * a corroborated shutdown ("discontinued" hard flag) -> real_alive "no".
+   * a corroborated shutdown ("discontinued" hard flag) -> real_alive "no";
+   * weak evidence (launch sites, link directories, paid PR wires, social media, activity the
+     vendor controls) never blocks the hollow pattern and never raises trust on its own: it
+     is left out of the independent sources and of the trust score.
 2. LLM judge: picks labels within the allowed set and ranks fact ids (reasons and findings).
    Reasons and findings are built in code from verified facts, so no source can be invented.
 """
@@ -32,6 +35,7 @@ from pydantic import BaseModel, Field
 
 from vet.llm import LLMError, StructuredLLM, load_prompt, untrusted
 from vet.schemas import Axis, Claim, ClaimCheck, Fact, Polarity, RealAlive, SourceKind, Trust
+from vet.sources import evidence_class
 from vet.text import registered_domain
 
 logger = logging.getLogger(__name__)
@@ -164,13 +168,15 @@ def history_years(facts: list[Fact], today: datetime) -> float:
 
 
 def independent_positive_sources(facts: list[Fact]) -> set[str]:
-    """Distinct sites with a positive record/independent fact, domain-age records excluded."""
+    """Distinct sites with a positive record/independent fact that is not weak evidence,
+    domain-age records excluded."""
     return {
         registered_domain(f.source_url)
         for f in facts
         if f.polarity == Polarity.POSITIVE
         and f.source_kind != SourceKind.VENDOR
         and f.collector not in ("age", *TIE_BREAK_COLLECTORS)
+        and evidence_class(f) != "weak"
     }
 
 
@@ -204,7 +210,9 @@ def apply_rules(
 
     ra_pos = _signal_sum(evidence, Axis.REAL_ALIVE, Polarity.POSITIVE)
     ra_neg = _signal_sum(scored, Axis.REAL_ALIVE, Polarity.NEGATIVE)
-    tr_pos = _sum(evidence, Axis.TRUST, Polarity.POSITIVE)
+    tr_pos = _sum(
+        [f for f in evidence if evidence_class(f) != "weak"], Axis.TRUST, Polarity.POSITIVE
+    )
     tr_neg = _sum(scored, Axis.TRUST, Polarity.NEGATIVE)
     ra_neg_count = _signal_count(scored, Axis.REAL_ALIVE, Polarity.NEGATIVE)
     # Breaches have their own rule (below); every other hard flag caps as before.
