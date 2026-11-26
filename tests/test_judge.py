@@ -74,7 +74,7 @@ def test_looks_facts_do_not_enter_scores() -> None:
     assert RealAlive.YES not in apply_rules([looks]).allowed_real_alive
 
 
-async def test_llm_judge_is_clamped_and_cannot_invent_sources() -> None:
+async def test_llm_judge_cannot_set_labels_or_invent_sources(caplog) -> None:  # noqa: ANN001
     breach = fact("b1", Axis.TRUST, Polarity.NEGATIVE, 0.8, is_hard_flag=True)
     vendor = fact("v1", Axis.TRUST, Polarity.POSITIVE, 0.9, source_kind=SourceKind.VENDOR)
 
@@ -98,7 +98,8 @@ async def test_llm_judge_is_clamped_and_cannot_invent_sources() -> None:
     # the breach is a finding even though the judge did not pick it; invented ids are dropped
     assert result.finding_fact_ids[0] == "b1"
     assert "made-up-2" not in result.finding_fact_ids
-    assert any("clamped" in n for n in result.notes)
+    assert any("judge proposed yes/trust; ignored" in n for n in result.notes)
+    assert "the code's labels yes/caution are kept" in caplog.text  # logged as a warning
 
 
 async def test_rules_only_fallback_when_llm_fails() -> None:

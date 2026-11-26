@@ -22,9 +22,9 @@ Selection (``select_reasons``, deterministic):
 * Trust axis coverage always holds. With no verified trust fact, the trust reason is the first
   of: an old, disclosed breach kept as a finding (as the record states it, plus the disclosure
   when a disclosure source verified); a company-register record; an established review
-  platform with a real review count; an independent press mention; and last a sentence
-  stating the evidence floor (domain history, independent sources, hard flags), linked to the
-  domain record. The verdict does not change.
+  platform with a real review count; an independent press mention; and last a sentence built
+  only from the domain record ("Domain registered <date>, under <n> years of history"), linked
+  to it. It never states source counts or an absence. The verdict does not change.
 
 Findings: verified, notable facts that did not make the reasons (neither the fact nor the same
 event), ranked by strength: contradictions first, then hard flags, breaches and other real
@@ -37,6 +37,7 @@ anonymous sources) needs a second independent site on the same topic.
 import asyncio
 import json
 import logging
+import math
 from dataclasses import dataclass, field
 
 from pydantic import BaseModel
@@ -47,7 +48,6 @@ from vet.fetch import Fetcher, FetchError, FetchResult, FetchStatusError, host_m
 from vet.judge import (
     AGE_EVIDENCE_TOPICS,
     history_years,
-    independent_positive_sources,
     is_breach,
     is_forced,
     is_real_negative,
@@ -81,6 +81,9 @@ AGE_LINK_PRIORITY = ("domain_registered", "first_capture", "capture_history", "f
 # Facts whose claim IS that the page is gone: verified by the 404/410.
 EXPECTS_MISSING_TOPICS = frozenset({"missing_page", "dead_help"})
 MISSING_STATUSES = frozenset({404, 410})
+# Pages that refuse us (now or when first fetched): the cached Tavily snippet may stand in.
+REFUSED_STATUSES = frozenset({403, 429})
+SNIPPET_SOURCED = "snippet-sourced"
 # Our own checks: their findings stand on the page or record they quote.
 SELF_EVIDENT_COLLECTORS = frozenset({"guard", "claims_check", "site_reader"})
 
@@ -90,6 +93,7 @@ class VerifyResult(BaseModel):
     source_ok: bool
     supported: bool | None = None
     note: str = ""
+    snippet_sourced: bool = False  # the page refused us (403/429); the quote is in the snippet
 
     @property
     def passed(self) -> bool:
@@ -130,6 +134,19 @@ async def _load(fetcher: Fetcher, fact: Fact) -> FetchResult | None:
     return await fetcher.get_text(url)
 
 
+def snippet_check(fact: Fact, snippets: dict[str, str], status: int) -> VerifyResult:
+    """The page answered 403/429: accept the quote if the cached Tavily snippet holds it."""
+    ok = bool(fact.quote) and contains_quote(snippets.get(fact.source_url, ""), fact.quote)
+    return VerifyResult(
+        fact_id=fact.id,
+        source_ok=ok,
+        snippet_sourced=ok,
+        note=f"{SNIPPET_SOURCED}: page answered {status}, quote found in cached Tavily snippet"
+        if ok
+        else f"page answered {status}; quote not in Tavily snippet",
+    )
+
+
 async def check_source(
     fact: Fact, fetcher: Fetcher, snippets: dict[str, str], settings: Settings
 ) -> VerifyResult:
@@ -155,6 +172,8 @@ async def check_source(
     except FetchStatusError as exc:
         if expects_missing and exc.status in MISSING_STATUSES:
             return VerifyResult(fact_id=fact.id, source_ok=True, note=f"page still {exc.status}")
+        if exc.status in REFUSED_STATUSES and not fact.check_url:
+            return snippet_check(fact, snippets, exc.status)
         return VerifyResult(fact_id=fact.id, source_ok=False, note=f"source unreachable: {exc}")
     except FetchError as exc:
         return VerifyResult(fact_id=fact.id, source_ok=False, note=f"source unreachable: {exc}")
@@ -166,6 +185,8 @@ async def check_source(
             source_ok=ok,
             note=f"page still {status}" if ok else f"page now answers {status}",
         )
+    if result is not None and result.status in REFUSED_STATUSES and not fact.check_url:
+        return snippet_check(fact, snippets, result.status)  # a stored 403 from an earlier run
     if result is None or not result.ok:
         status = result.status if result else "none"
         return VerifyResult(fact_id=fact.id, source_ok=False, note=f"source status {status}")
@@ -341,7 +362,7 @@ def _trust_fallback(picks: list[_Pick], chain: list[Reason]) -> tuple[Reason | N
     """The first usable trust fallback, and whether it was applied in place: a fact that is
     already a real_alive reason moves to the trust axis when real_alive keeps another reason."""
     for r in chain:
-        if r.text.startswith(FLOOR_PREFIX):
+        if r.fact_id.startswith(f"{AGE}-"):  # the domain-record sentence: always usable
             return r, False
         same = [i for i, p in enumerate(picks) if p.reason.fact_id == r.fact_id]
         if not same:
@@ -611,40 +632,38 @@ def breach_reason(
     )
 
 
-FLOOR_PREFIX = "Evidence behind the trust call:"
-
-
 def _as_trust(fact: Fact) -> Reason:
     return reason_from(fact).model_copy(update={"axis": Axis.TRUST})
 
 
 def floor_reason(facts: dict[str, Fact], passed: set[str]) -> Reason | None:
-    """A sentence stating the evidence floor, from verified facts only, linked to the domain
-    record (RDAP lookup first). None without a verified domain-age record."""
-    verified = [f for f in facts.values() if f.id in passed]
-    age = {f.topic: f for f in verified if f.collector == AGE and f.observed_at}
-    link = next((age[t] for t in AGE_LINK_PRIORITY if t in age), None)
-    if link is None:
+    """The last-resort trust reason, from the verified domain record only: "Domain registered
+    <date>, under <n> years of history", linked to that record. No source counts, no absence.
+    None without a verified, dated domain-age record."""
+    age = [
+        f
+        for f in facts.values()
+        if f.id in passed
+        and f.collector == AGE
+        and f.topic in AGE_EVIDENCE_TOPICS
+        and f.observed_at is not None
+    ]
+    if not age:
         return None
-    years = history_years(verified, max(f.fetched_at for f in verified))
-    # Same records as history_years (capture_history is dated by year only).
-    since = min(
-        (f.observed_at for f in age.values() if f.topic in AGE_EVIDENCE_TOPICS and f.observed_at),
-        default=link.observed_at,
-    )
-    sources = len(independent_positive_sources(verified))
-    hard = sum(1 for f in verified if f.is_hard_flag or f.topic == "contradicted_claim")
-    flags = (
-        f"{hard} hard flag(s) or contradiction(s)" if hard else "no hard flags or contradictions"
-    )
+    first = min(age, key=lambda f: (f.observed_at, AGE_LINK_PRIORITY.index(f.topic)))
+    since = first.observed_at
+    if since is None:
+        return None
+    years = history_years(age, max(f.fetched_at for f in age))
+    n = math.floor(years) + 1
+    what = "Domain registered" if first.topic == "domain_registered" else "First domain record"
     return Reason(
-        text=f"{FLOOR_PREFIX} {years:g} year{'' if years == 1 else 's'} of domain history "
-        f"(since {since.date().isoformat()}), {sources} verified independent source(s), {flags}",
+        text=f"{what} {since.date().isoformat()}, under {n} year{'' if n == 1 else 's'} of history",
         axis=Axis.TRUST,
         polarity=Polarity.NEUTRAL,
-        source_url=link.source_url,
-        quote=link.quote,
-        fact_id=link.id,
+        source_url=first.source_url,
+        quote=first.quote,
+        fact_id=first.id,
     )
 
 

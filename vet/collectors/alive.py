@@ -7,6 +7,11 @@
   the latest PyPI or npm release, the App Store listing's latest version. Each is linked to the
   public page and verified against the platform's API response.
 
+* Open-source adoption (a strong record): the GitHub account's most-starred repository, when it
+  has at least MIN_STARS stars, at least MIN_CONTRIBUTORS contributors and a push in the last
+  year. Stars and contributors come from other people, so unlike release dates this counts as
+  evidence for the vendor. Unauthenticated GitHub API, rate-limited like every API host.
+
 Only accounts and packages whose name matches the vendor are used, so a site cannot borrow a
 famous project's activity by linking to it.
 """
@@ -33,6 +38,11 @@ FROZEN_DAYS = 730
 DATED_PAGE_KINDS = ("changelog", "blog")
 
 GITHUB_API = "https://api.github.com/users/{owner}/repos?sort=pushed&per_page=10"
+GITHUB_CONTRIBUTORS = "https://api.github.com/repos/{owner}/{repo}/contributors?per_page=1&anon=1"
+GITHUB_HEADERS = {"Accept": "application/vnd.github+json"}
+MIN_STARS = 100
+MIN_CONTRIBUTORS = 5
+_LAST_PAGE = re.compile(r'[?&]page=(\d+)>;\s*rel="last"')
 PYPI_API = "https://pypi.org/pypi/{name}/json"
 NPM_API = "https://registry.npmjs.org/{name}"
 ITUNES_API = "https://itunes.apple.com/lookup?id={id}"
@@ -207,7 +217,7 @@ def _iso(raw: str) -> datetime:
 
 async def github_fact(ctx: Context, owner: str, n: int, today: datetime) -> Fact | None:
     api = GITHUB_API.format(owner=owner)
-    repos = await ctx.fetcher.get_json(api, headers={"Accept": "application/vnd.github+json"})
+    repos = await ctx.fetcher.get_json(api, headers=GITHUB_HEADERS)
     live = [r for r in repos if not r.get("fork") and not r.get("archived") and r.get("pushed_at")]
     if not live:
         return None
@@ -222,6 +232,54 @@ async def github_fact(ctx: Context, owner: str, n: int, today: datetime) -> Fact
         f"https://github.com/{owner}/{repo['name']}",
         api,
         today,
+    )
+
+
+def contributor_count(link_header: str, body: str) -> int:
+    """Contributors from a per_page=1 listing: the last page number, else the items shown."""
+    m = _LAST_PAGE.search(link_header)
+    if m:
+        return int(m.group(1))
+    return 1 if body.strip() not in ("", "[]") else 0
+
+
+async def github_adoption_fact(ctx: Context, owner: str, n: int, today: datetime) -> Fact | None:
+    """Stars, contributors and last push of the account's most-starred live repository."""
+    api = GITHUB_API.format(owner=owner)
+    repos = await ctx.fetcher.get_json(api, headers=GITHUB_HEADERS)  # cached: same as above
+    live = [r for r in repos if not r.get("fork") and not r.get("archived") and r.get("pushed_at")]
+    if not live:
+        return None
+    repo = max(live, key=lambda r: int(r.get("stargazers_count") or 0))
+    stars = int(repo.get("stargazers_count") or 0)
+    pushed = _iso(repo["pushed_at"])
+    if stars < MIN_STARS or (today - pushed).days > ACTIVE_DAYS:
+        return None
+    result = await ctx.fetcher.fetch_api(
+        GITHUB_CONTRIBUTORS.format(owner=owner, repo=repo["name"]), headers=GITHUB_HEADERS
+    )
+    if not result.ok:
+        return None
+    link = next((v for k, v in result.headers.items() if k.lower() == "link"), "")
+    contributors = contributor_count(link, result.text)
+    if contributors < MIN_CONTRIBUTORS:
+        return None
+    return Fact(
+        id=fact_id(NAME, n),
+        collector=NAME,
+        statement=f"GitHub: github.com/{owner}/{repo['name']} has {stars:,} stars and "
+        f"{contributors:,} contributors; last pushed {pushed.date().isoformat()}",
+        axis=Axis.TRUST,
+        polarity=Polarity.POSITIVE,
+        weight=0.5,
+        source_url=f"https://github.com/{owner}/{repo['name']}",
+        check_url=api,
+        quote=repo["pushed_at"],
+        source_kind=SourceKind.RECORD,
+        fetched_at=today,
+        topic="open_source",
+        observed_at=pushed,
+        code_worded=True,
     )
 
 
@@ -298,6 +356,7 @@ async def collect(ctx: Context) -> list[Fact]:
     n = 10
     if "github" in accounts:
         jobs.append(github_fact(ctx, accounts["github"], n, today))
+        jobs.append(github_adoption_fact(ctx, accounts["github"], n + 4, today))
     if "pypi" in accounts:
         jobs.append(pypi_fact(ctx, accounts["pypi"], n + 1, today))
     if "npm" in accounts:

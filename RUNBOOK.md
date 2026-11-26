@@ -27,7 +27,7 @@ Then run `uv run vet validate runs/<smoke-test-id>` to confirm the labels map.
 ## 19:00 Products arrive
 
 1. Put one URL per line in `blind.txt` (lines starting with `#` are ignored).
-2. Run everything, in parallel (5 at a time), with Tavily advanced search:
+2. Run everything, in parallel (4 at a time), with Tavily advanced search:
 
    ```bash
    uv run vet run --file blind.txt --advanced

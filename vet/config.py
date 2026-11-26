@@ -15,18 +15,33 @@ DEFAULT_JUDGE_MODEL = "claude-opus-5-5"
 DEFAULT_FAST_MODEL = "claude-haiku-5-5"
 DEFAULT_PRODUCT_BUDGET_S = 180.0
 DEFAULT_COLLECTOR_TIMEOUT_S = 45.0
+# The site reader may fall back to Wayback copies, which share a 20 req/min limit.
+DEFAULT_SITE_READER_TIMEOUT_S = 75.0
 DEFAULT_FETCH_TIMEOUT_S = 15.0
 DEFAULT_CONNECT_TIMEOUT_S = 5.0
 DEFAULT_HOST_INTERVAL_S = 1.0
 DEFAULT_MAX_RETRIES = 2
 DEFAULT_BACKOFF_BASE_S = 1.0
-DEFAULT_MAX_PARALLEL_PRODUCTS = 5
+DEFAULT_MAX_PARALLEL_PRODUCTS = 4  # fewer products sharing the Wayback limit at once
 DEFAULT_BREACH_RECENT_YEARS = 3
 OutputFormat = Literal["json", "csv"]
 OUTPUT_FORMATS: tuple[str, ...] = ("json", "csv")
 
 TAVILY_CREDITS_BASIC = 1
 TAVILY_CREDITS_ADVANCED = 2
+
+
+class LabelThresholds(BaseModel):
+    """Score -> label cut-offs. Scores are sums of weight x polarity (+1/-1) over the scored,
+    verified facts of one question. A score exactly at a threshold gets the more cautious
+    label."""
+
+    model_config = ConfigDict(frozen=True)
+
+    real_alive_yes_above: float = 0.0
+    real_alive_no_at_or_below: float = -0.5
+    trust_above: float = 0.3
+    do_not_trust_at_or_below: float = -0.5
 
 
 class HostPolicy(BaseModel):
@@ -91,6 +106,7 @@ class Settings(BaseModel):
 
     product_budget_s: float = DEFAULT_PRODUCT_BUDGET_S
     collector_timeout_s: float = DEFAULT_COLLECTOR_TIMEOUT_S
+    site_reader_timeout_s: float = DEFAULT_SITE_READER_TIMEOUT_S
     fetch_timeout_s: float = DEFAULT_FETCH_TIMEOUT_S
     connect_timeout_s: float = DEFAULT_CONNECT_TIMEOUT_S
     max_retries: int = DEFAULT_MAX_RETRIES
@@ -108,6 +124,8 @@ class Settings(BaseModel):
     llm_cache: bool = True
     # A breach younger than this (or never disclosed by the vendor) makes trust "caution".
     breach_recent_years: int = DEFAULT_BREACH_RECENT_YEARS
+    # Labels are decided in code from these cut-offs (VET_LABEL_THRESHOLDS, JSON object).
+    label_thresholds: LabelThresholds = Field(default_factory=LabelThresholds)
 
     # Verdict file format for the organiser ("json" or "csv").
     output_format: OutputFormat = "json"
@@ -158,6 +176,7 @@ class Settings(BaseModel):
             ("fast_model", "FAST_MODEL"),
             ("product_budget_s", "VET_PRODUCT_BUDGET_S"),
             ("collector_timeout_s", "VET_COLLECTOR_TIMEOUT_S"),
+            ("site_reader_timeout_s", "VET_SITE_READER_TIMEOUT_S"),
             ("fetch_timeout_s", "VET_FETCH_TIMEOUT_S"),
             ("contact", "VET_CONTACT"),
             ("cache_path", "VET_CACHE_PATH"),
@@ -171,6 +190,9 @@ class Settings(BaseModel):
             if raw:
                 values[field] = raw.lower() if field == "output_format" else raw
 
+        thresholds = _json_env("VET_LABEL_THRESHOLDS")
+        if thresholds:
+            values["label_thresholds"] = thresholds
         host_overrides = _json_env("VET_HOST_POLICIES")
         if host_overrides:
             values["host_policies"] = {**DEFAULT_HOST_POLICIES, **host_overrides}

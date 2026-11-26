@@ -114,7 +114,7 @@ async def run_product(url: str, deps: Deps) -> tuple[ProductRecord, trace.Trace]
     tasks: dict[str, asyncio.Task[CollectorResult]] = {
         "age": asyncio.create_task(run_collector("age", age.collect, ctx, timeout))
     }
-    report, site_result = await _site(ctx, timeout)
+    report, site_result = await _site(ctx, settings.site_reader_timeout_s)
     if report is not None:
         ctx.claims, ctx.identity, ctx.pages = report.claims, report.identity, report.pages
     # Run even when the homepage is unreadable (e.g. a WAF answers 403): search and breach
@@ -152,7 +152,14 @@ async def run_product(url: str, deps: Deps) -> tuple[ProductRecord, trace.Trace]
             "facts": [f.id for f in check_facts],
         }
     )
-    judgement = await judge(deps.llm, ctx.claims, facts, claim_checks, settings.breach_recent_years)
+    judgement = await judge(
+        deps.llm,
+        ctx.claims,
+        facts,
+        claim_checks,
+        settings.breach_recent_years,
+        settings.label_thresholds,
+    )
     by_id = {f.id: f for f in facts}
     ranked = [by_id[i] for i in judgement.ranked_fact_ids if i in by_id]
     snippets = tavily.snippets if tavily else {}
@@ -169,7 +176,9 @@ async def run_product(url: str, deps: Deps) -> tuple[ProductRecord, trace.Trace]
     )
     reasons = selection.reasons
     failed = {c.fact_id for c in checks if not c.passed}
-    judgement = relabel_after_verification(judgement, facts, failed, settings.breach_recent_years)
+    judgement = relabel_after_verification(
+        judgement, facts, failed, settings.breach_recent_years, settings.label_thresholds
+    )
 
     verdict = Verdict(
         product_url=url,

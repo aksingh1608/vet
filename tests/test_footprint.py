@@ -40,7 +40,7 @@ def classify(user: str) -> _Classified:
                 G2,
                 statement="G2 lists 212 reviews of Ledgerly averaging 4.6 out of 5",
                 quote="Ledgerly has 212 reviews on G2 with an average rating of 4.6 out of 5",
-                weight=1.7,  # clamped to 1.0
+                weight=1.7,  # the model's number is ignored
             ),
             item(
                 "https://www.prnewswire.com/ledgerly-raises",
@@ -90,7 +90,7 @@ async def test_footprint_keeps_only_relevant_independent_quoted_results(router_f
     assert facts[0].statement == "G2: 212 reviews, average rating 4.6/5"
     assert facts[0].code_worded and "212 reviews on G2" in facts[0].quote
     assert all(f.source_kind == SourceKind.INDEPENDENT for f in facts)
-    assert facts[0].weight == 1.0
+    assert facts[0].weight == 0.5  # strong evidence class: a review platform with 212 reviews
     assert facts[1].is_hard_flag and facts[1].axis == Axis.TRUST
 
     queries = [json.loads(r.content) for r in rec.requests]

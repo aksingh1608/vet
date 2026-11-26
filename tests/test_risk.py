@@ -1,6 +1,8 @@
 import json
 from datetime import UTC, datetime
 
+import pytest
+
 from tests.conftest import FakeLLM, fixture_text
 from vet.collectors import risk
 from vet.collectors.base import Context, SiteIdentity
@@ -233,3 +235,90 @@ def test_vendors_own_breach_notice_counts_without_naming_itself() -> None:
     assert names_entity(notice, "canva.com", {"Canva"}, own_site=True)
     assert not names_entity(notice, "canva.com", {"Canva"})  # a third party must name it
     assert not names_entity("Cal.eu closes on 1 Nov", "cal.com", {"Cal.com"}, own_site=True)
+
+
+# ---- breach decided in code -------------------------------------------------------------------
+
+CANVA_2026 = (
+    "Canva has disclosed that “some enterprise customer records” were recently exposed "
+    "during a cyber security incident affecting one of its third-party data tools"
+)
+CANVA_LEAK_SITE = (
+    "A new dedicated leak site by threat actors calling themselves “The Seven Deadly Sins” "
+    "lists Canva Pty Ltd among the sites that haven’t paid them."
+)
+CANVA_2019 = (
+    "The Canva data breach occurred on May 24, 2019, when hackers compromised the platform’s "
+    "database, reportedly stealing information tied to approximately 139 million user accounts."
+)
+BASECAMP_STUFFING = (
+    "Basecamp's team logged out and reset the passwords for all of the 124 accounts which were "
+    "successfully breached"
+)
+BASECAMP_NOT_COMPROMISE = (
+    "The January 29, 2019 event documented here was credential stuffing, not a confirmed "
+    "compromise of Basecamp’s systems"
+)
+
+
+@pytest.mark.parametrize("llm_said", ["breach", "security_incident"])
+@pytest.mark.parametrize(
+    ("quote", "expected"),
+    [
+        (CANVA_2026, "breach"),  # records ... exposed
+        (CANVA_2019, "breach"),  # "data breach"
+        (CANVA_LEAK_SITE, "security_incident"),  # a listing on a leak site is not a breach
+        (BASECAMP_STUFFING, "security_incident"),  # "breached" accounts: credential stuffing
+        (BASECAMP_NOT_COMPROMISE, "security_incident"),
+        ("Bei Ledgerly kam es zu einer Datenpanne", "breach"),
+        ("Ledgerly bestätigt Datenleck", "breach"),
+        ("Ledgerly says this was not a data breach", "security_incident"),
+    ],
+)
+def test_breach_is_decided_in_code_whatever_the_model_said(
+    llm_said: str, quote: str, expected: str
+) -> None:
+    assert risk.security_event(llm_said, quote, 2026, frozenset()) == expected
+
+
+def test_hibp_record_in_the_same_year_makes_a_breach() -> None:
+    quote = "Hackers compromised Canva's database in May 2019"
+    assert risk.security_event("security_incident", quote, 2019, frozenset({2019})) == "breach"
+    assert risk.security_event("security_incident", quote, 2026, frozenset({2019})) != "breach"
+    assert risk.security_event("lawsuit", CANVA_2019, 2019, frozenset({2019})) == "lawsuit"
+
+
+async def test_canva_2026_breach_is_stable_and_stated_as_its_quote(router_fetcher) -> None:
+    fetcher, _ = router_fetcher([])
+    async with fetcher:
+        ctx = Context(
+            url="https://www.canva.com/", domain="canva.com", settings=fetcher.settings,
+            fetcher=fetcher, llm=FakeLLM(), tavily=None,
+            identity=SiteIdentity(vendor_name="Canva"),
+        )  # fmt: skip
+    url = "https://www.cyberdaily.au/security/14317-canva"
+    seen = results((url, f"... {CANVA_2026} ..."))
+    for llm_said in ("breach", "security_incident"):
+        facts = news_facts_from(
+            [item(url, llm_said, CANVA_2026, date="2026", source_type="press")], seen, ctx, NOW, 10
+        )
+        (fact,) = facts
+        assert fact.topic == "breach" and fact.code_worded
+        assert fact.statement == f'cyberdaily.au: "{CANVA_2026}"'
+
+
+async def test_basecamp_credential_stuffing_never_becomes_a_breach(router_fetcher) -> None:
+    fetcher, _ = router_fetcher([])
+    async with fetcher:
+        ctx = Context(
+            url="https://basecamp.com/", domain="basecamp.com", settings=fetcher.settings,
+            fetcher=fetcher, llm=FakeLLM(), tavily=None,
+            identity=SiteIdentity(vendor_name="Basecamp"),
+        )  # fmt: skip
+    url = "https://www.bleepingcomputer.com/news/security/basecamp-stuffing"
+    seen = results((url, f"... {BASECAMP_STUFFING} ..."))
+    facts = news_facts_from(
+        [item(url, "breach", BASECAMP_STUFFING, date="2019", source_type="press")],
+        seen, ctx, NOW, 10, hibp_years=frozenset(),
+    )  # fmt: skip
+    assert [f.topic for f in facts] == ["security_incident"]
