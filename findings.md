@@ -1,17 +1,26 @@
-# Norma findings log
+# Findings log
 
-Every finding from Norma `live_check`, one row each. Status is **fixed** or **accepted** (with why).
+## Norma findings
 
-| Date | Branch | Rule | File | Status | Why / fix |
-|---|---|---|---|---|---|
-| 2026-11-25 | feat/phase-1-skeleton | — (check not run) | all Phase 1 files | accepted | Norma `live_check` returned `organisation_unresolved` for this connection, so no automated check ran. Code was self-reviewed against python-norma-ruleset (63 rules) and secrets-norma-ruleset (13 rules). Re-run `live_check` before merging. |
-| 2026-11-25 | feat/phase-1-skeleton | py-mng-ip-literal-1.0 (self-review, possible) | vet/config.py | accepted | `DEFAULT_HOST_INTERVALS` names API hosts (web.archive.org, crt.sh, …) as rate-limit defaults. They are overridable via `VET_HOST_INTERVALS`; the hosts are part of the spec, not deployment config. |
-| 2026-11-25 | feat/phase-2-first-verdict | — (check not run) | all Phase 2 files | accepted | Norma org now resolves, but `live_check` returns `remote_not_matched` and `import_repository` returns `grant_required`: the Norma GitHub App has no access to aksingh1608/vet yet. Code self-reviewed against python-norma-ruleset and secrets-norma-ruleset. |
-| 2026-11-25 | feat/phase-2-first-verdict | py-maint-broad-except-1.0 (self-review, possible) | vet/collectors/base.py, vet/orchestrator.py | accepted | `except Exception` around each collector is the spec's graceful-failure rule. The error is logged with `logger.warning(..., exc_info=True)` and recorded in the trace and product record; it is not swallowed. |
-| 2026-11-25 | feat/phase-2-first-verdict | py-mng-ip-literal-1.0 / py-maint-hardcoded-url-default-1.0 (self-review, possible) | vet/collectors/*.py, vet/tavily.py | accepted | API endpoints (RDAP, crt.sh, Wayback CDX, Companies House, Tavily) are module constants named by the spec, not deployment config. No URL is an `os.getenv` default. |
-| 2026-11-25 | feat/phase-2-first-verdict | py-perf-blocking-call-in-async-1.0 (self-review, possible) | vet/llm.py `load_prompt` | accepted | Reads a <2 KB prompt file from the package inside async callers; negligible. SQLite and trafilatura calls already run in `asyncio.to_thread`. |
-| 2026-11-25 | feat/phase-2-first-verdict | py-sec-hardcoded-secret-1.0 (self-review, possible) | tests/conftest.py | accepted | `FAKE_TAVILY_TOKEN` / `FAKE_CH_TOKEN` are placeholder strings for offline tests, never sent anywhere; tests assert they stay out of URLs, bodies and the cache. |
-| 2026-11-25 | feat/phase-2-first-verdict | py-sec-hardcoded-secret-1.0, sec-* (self-review) | vet/*.py | prevented | Keys only from `.env` via `SecretStr`; sent in headers (Tavily Bearer, Companies House Basic), never in URLs, request bodies, cache keys, cache rows, logs or traces. |
-| 2026-11-25 | feat/phase-2-first-verdict | py-scal-http-no-deadline-1.0, py-mng-subprocess-no-check-1.0, py-scal-subprocess-no-timeout-1.0 (self-review) | vet/fetch.py, vet/llm.py, vet/cli.py | prevented | Every HTTP client has a deadline (15 s, crt.sh 20 s, LLM 90 s); `git rev-parse` uses `check=True` and a timeout. |
-| 2026-11-25 | feat/phase-2-first-verdict | — (check not run) | vet/site_reader.py, vet/verify.py, vet/cli.py, tests | accepted | Same as above: repo not yet visible to Norma (`grant_required`). Self-reviewed; no new patterns beyond the rows above. |
-| 2026-11-25 | feat/phase-2-first-verdict | live_check (python, secrets, fastapi, sqlalchemy rulesets) | 29 source and test files of PR #2 | clean | Norma `live_check` after the repo import: 0 issues in all 29 `.py` files. `.env.example` and `.gitignore`: `not_checkable` (no rules for these file types). The "possible" self-review rows above were not raised by Norma; their reasons stand as documentation. Outcome registered with `register_applied_actions` (11 verified compliant, 3 prevented). |
+Only issues Norma actually reported, through `live_check` (MCP) or the Norma GitHub App's pull request check.
+Nothing else goes in this section. DEFENCE.md cites only this section.
+
+| Date | Branch / PR | Source | Rule | File | Severity | Status | Why / fix |
+|---|---|---|---|---|---|---|---|
+| 2026-11-25 | feat/phase-2-first-verdict (PR #2) | `live_check` (python, secrets, fastapi, sqlalchemy rulesets) | — | 29 `.py` source and test files | — | clean | 0 issues. `.env.example` and `.gitignore` returned `not_checkable` (no rules for these file types). Outcome registered with `register_applied_actions` (11 verified compliant, 3 prevented). |
+| 2026-11-25 | feat/phase-2-first-verdict (PR #2) | Norma GitHub App PR check | — | files changed by PR #2 | — | clean | "No issues introduced by your changes." [Report](https://norma.qualityclouds.com/projects/12410) |
+
+## Self-review notes (not Norma findings)
+
+Our own review of the code against the Norma rulesets (python-norma-ruleset, secrets-norma-ruleset), written
+while Norma could not yet see the repo. Norma did not raise any of these. They are kept as design notes only.
+
+| Date | Branch | Rule we reviewed against | File | Note |
+|---|---|---|---|---|
+| 2026-11-25 | feat/phase-1-skeleton | py-mng-ip-literal-1.0 | vet/config.py | `DEFAULT_HOST_INTERVALS` names API hosts (web.archive.org, crt.sh, …) as rate-limit defaults. They can be overridden with `VET_HOST_INTERVALS`; the hosts are part of the spec, not deployment config. |
+| 2026-11-25 | feat/phase-2-first-verdict | py-maint-broad-except-1.0 | vet/collectors/base.py, vet/orchestrator.py | `except Exception` around each collector is the spec's graceful-failure rule. The error is logged with `logger.warning(..., exc_info=True)` and recorded in the trace and product record; it is not swallowed. |
+| 2026-11-25 | feat/phase-2-first-verdict | py-mng-ip-literal-1.0 / py-maint-hardcoded-url-default-1.0 | vet/collectors/*.py, vet/tavily.py | API endpoints (RDAP, crt.sh, Wayback CDX, Companies House, Tavily) are module constants named by the spec, not deployment config. No URL is an `os.getenv` default. |
+| 2026-11-25 | feat/phase-2-first-verdict | py-perf-blocking-call-in-async-1.0 | vet/llm.py `load_prompt` | Reads a <2 KB prompt file from the package inside async callers; negligible. SQLite and trafilatura calls already run in `asyncio.to_thread`. |
+| 2026-11-25 | feat/phase-2-first-verdict | py-sec-hardcoded-secret-1.0 | tests/conftest.py | `FAKE_TAVILY_TOKEN` / `FAKE_CH_TOKEN` are placeholder strings for offline tests, never sent anywhere; tests assert they stay out of URLs, bodies and the cache. |
+| 2026-11-25 | feat/phase-2-first-verdict | py-sec-hardcoded-secret-1.0, sec-* | vet/*.py | Keys come only from `.env` via `SecretStr` and are sent only in headers (Tavily Bearer, Companies House Basic); never in URLs, request bodies, cache keys, cache rows, logs or traces. |
+| 2026-11-25 | feat/phase-2-first-verdict | py-scal-http-no-deadline-1.0, py-mng-subprocess-no-check-1.0, py-scal-subprocess-no-timeout-1.0 | vet/fetch.py, vet/llm.py, vet/cli.py | Every HTTP client has a deadline (15 s, crt.sh 20 s, LLM 90 s); `git rev-parse` uses `check=True` and a timeout. |
