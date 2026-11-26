@@ -1,14 +1,19 @@
 {% extends "base.html.j2" %}
 {% block title %}vet run {{ run_id }}{% endblock %}
+{% block style %}
+  .site { font-size: 15px; margin-left: 10px; white-space: nowrap; }
+  td.product a.name { font-weight: 700; color: var(--ink); }
+{% endblock %}
 {% block body %}
-<h1>vet run {{ run_id }}</h1>
-<p class="muted">{{ pages | length }} product{{ "" if pages | length == 1 else "s" }}</p>
+<h1>Vendor checks</h1>
+<p class="muted">Run {{ run_id }} &middot; {{ pages | length }} product{{ "" if pages | length == 1 else "s" }}</p>
 <table>
   <tr><th>Product</th><th>Real &amp; alive</th><th>Trust</th><th class="num">Reasons</th>
       <th class="num">Findings</th><th class="num">Seconds</th></tr>
   {% for p in pages %}
   <tr>
-    <td><a href="{{ p.slug }}.html">{{ p.v.product_url }}</a></td>
+    <td class="product"><a class="name" href="{{ p.slug }}.html">{{ p.v.product_url | domain }}</a>
+      <a class="site" href="{{ p.v.product_url | safe_url }}" rel="noopener noreferrer nofollow">visit site &#8599;</a></td>
     <td><span class="pill {{ p.v.real_alive }}">{{ p.v.real_alive }}</span></td>
     <td><span class="pill {{ p.v.trust }}">{{ p.v.trust | replace("_", " ") }}</span></td>
     <td class="num">{{ p.v.reasons | length }}</td>

@@ -1,58 +1,91 @@
 {% extends "base.html.j2" %}
-{% block title %}vet: {{ v.product_url }}{% endblock %}
+{% block title %}vet: {{ v.product_url | domain }}{% endblock %}
+{% block style %}
+  .verdict { display: grid; grid-template-columns: 1fr auto; gap: 18px 32px; align-items: start;
+             padding: 28px 32px; }
+  .verdict .who { grid-column: 1 / -1; }
+  .verdict .domain { font-size: 20px; margin-top: 6px; }
+  .labels { display: flex; gap: 18px; flex-wrap: wrap; }
+  .label { border-radius: 14px; padding: 14px 22px; min-width: 230px; }
+  .label .k { font-size: 15px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em;
+              opacity: .85; }
+  .label .val { font-size: 36px; font-weight: 800; line-height: 1.15; }
+  .conf { text-align: right; }
+  .conf .val { font-size: 36px; font-weight: 800; }
+  .conf .k { font-size: 15px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em;
+             color: var(--muted); }
+  .summary { grid-column: 1 / -1; font-size: 22px; margin: 0; }
+  .status { font-size: 22px; font-weight: 800; text-align: center; width: 56px; }
+  .s-confirmed { color: var(--good); } .s-unconfirmed { color: var(--warn); }
+  .s-contradicted { color: var(--bad); }
+  tr.contradicted td { background: var(--bad-bg); }
+  .records { margin: 0; padding: 0; list-style: none; }
+  .records li + li { margin-top: 6px; }
+  .evidence { display: grid; gap: 14px; }
+  .ev { background: var(--card); border: 1px solid var(--line); border-left: 6px solid var(--line);
+        border-radius: 10px; padding: 16px 20px; }
+  .ev.positive { border-left-color: var(--good); }
+  .ev.negative { border-left-color: var(--bad); }
+  .src { display: inline-block; font-size: 14px; font-weight: 700; letter-spacing: .03em;
+         text-transform: uppercase; color: var(--muted); background: var(--neutral-bg);
+         border-radius: 6px; padding: 2px 8px; margin-bottom: 8px; }
+  .ev .text { font-size: 20px; margin: 0; }
+  .ev blockquote { margin: 10px 0 0; padding: 8px 14px; background: var(--bg);
+                   border-radius: 6px; color: var(--muted); font-size: 16px; }
+  .ev .link { display: block; margin-top: 10px; font-size: 15px; word-break: break-all; }
+  .flags { border: 2px solid var(--bad); background: var(--bad-bg); border-radius: 12px;
+           padding: 14px 22px; }
+  .flags li { margin: 8px 0; }
+  .flags .tag { font-weight: 800; color: var(--bad); text-transform: uppercase; font-size: 14px;
+                letter-spacing: .05em; margin-right: 6px; }
+  .timeline { display: flex; position: relative; padding: 34px 10px 6px; }
+  .timeline::before { content: ""; position: absolute; left: 6%; right: 6%; top: 42px;
+                      height: 4px; background: var(--line); border-radius: 2px; }
+  .tp { flex: 1; text-align: center; position: relative; }
+  .tp .dot { width: 20px; height: 20px; border-radius: 50%; background: var(--accent);
+             border: 4px solid var(--card); box-shadow: 0 0 0 2px var(--accent);
+             margin: 0 auto 12px; position: relative; }
+  .tp.today .dot { background: var(--ink); box-shadow: 0 0 0 2px var(--ink); }
+  .tp .d { font-size: 21px; font-weight: 800; font-variant-numeric: tabular-nums; }
+  .tp .l { font-size: 16px; color: var(--muted); }
+  .ok { color: var(--good); font-weight: 800; } .fail { color: var(--bad); font-weight: 800; }
+  tr.total td { font-weight: 800; background: var(--neutral-bg); }
+{% endblock %}
 {% block body %}
-<p class="small"><a href="index.html">&larr; all products</a></p>
-<h1>{{ v.product_url }}</h1>
-<p class="muted small">{{ r.identity.legal_entity or r.identity.vendor_name or "vendor not identified" }}
-  &middot; run {{ v.run_id }} &middot; {{ "%.0f"|format(r.seconds) }} s
-  &middot; {{ r.usage.tavily_credits }} Tavily credits</p>
+<p class="back"><a href="index.html">&larr; all products</a></p>
 
-<div class="labels">
-  <span class="pill {{ v.real_alive }}">real &amp; alive: {{ v.real_alive }}</span>
-  <span class="pill {{ v.trust }}">trust: {{ v.trust | replace("_", " ") }}</span>
-  <span class="pill">confidence {{ "%.2f"|format(v.confidence) }}</span>
-</div>
-<p>{{ v.summary }}</p>
+<section class="card verdict">
+  <div class="who">
+    <h1>{{ r.identity.vendor_name or (v.product_url | domain) }}</h1>
+    <div class="domain muted">{{ v.product_url | domain }}
+      {% if r.identity.legal_entity %}&middot; {{ r.identity.legal_entity }}{% endif %}
+      &middot; <a href="{{ v.product_url | safe_url }}" rel="noopener noreferrer nofollow">visit site &#8599;</a></div>
+  </div>
+  <div class="labels">
+    <div class="label {{ v.real_alive }}"><div class="k">Real &amp; alive</div>
+      <div class="val">{{ v.real_alive }}</div></div>
+    <div class="label {{ v.trust }}"><div class="k">Trust</div>
+      <div class="val">{{ v.trust | replace("_", " ") }}</div></div>
+  </div>
+  <div class="conf"><div class="k">Confidence</div>
+    <div class="val">{{ "%.0f"|format(v.confidence * 100) }}%</div></div>
+  {% if v.summary %}<p class="summary">{{ v.summary }}</p>{% endif %}
+</section>
 
-<h2>Reasons</h2>
-<div class="card">
-<ol class="reasons">
-{% for reason in v.reasons %}
-  <li>
-    <span class="{{ reason.polarity }}">{{ "+" if reason.polarity == "positive" else ("&minus;"|safe if reason.polarity == "negative" else "&middot;"|safe) }}</span>
-    {{ reason.text }}
-    <span class="muted small">({{ reason.axis | replace("_", " ") }})</span>
-    <br><a class="small" href="{{ reason.source_url | safe_url }}" rel="noopener noreferrer nofollow">{{ reason.source_url }}</a>
-    {% if reason.quote %}<p class="quote">&ldquo;{{ reason.quote }}&rdquo;</p>{% endif %}
-  </li>
-{% endfor %}
-</ol>
-</div>
-
-<h2>Findings</h2>
-{% if v.findings %}
-<div class="card">
-<ul>
-{% for f in v.findings %}
-  <li>{{ f.text }}<br><a class="small" href="{{ f.source_url | safe_url }}" rel="noopener noreferrer nofollow">{{ f.source_url }}</a></li>
-{% endfor %}
-</ul>
-</div>
-{% else %}
-<p class="muted">No verified contradictions or red flags.</p>
-{% endif %}
-
-<h2>Claims checked</h2>
-{% if r.claim_checks %}
+<h2>Claims vs records</h2>
+{% if claim_rows %}
 <table>
-  <tr><th>Claim</th><th>Status</th><th>Note</th></tr>
-  {% set claims = {} %}
-  {% for c in r.claims %}{% set _ = claims.update({c.id: c}) %}{% endfor %}
-  {% for c in r.claim_checks %}
-  <tr>
-    <td>{{ claims[c.claim_id].text if c.claim_id in claims else c.claim_id }}</td>
-    <td class="{{ 'flag' if c.status == 'contradicted' else '' }}">{{ c.status }}</td>
-    <td class="muted small">{{ c.note }}</td>
+  <tr><th></th><th>The vendor says</th><th>What the records show</th></tr>
+  {% for row in claim_rows %}
+  <tr class="{{ row.check.status }}">
+    <td class="status s-{{ row.check.status }}" title="{{ row.check.status }}">{{ {"confirmed": "✓", "unconfirmed": "?", "contradicted": "✗"}[row.check.status] }}</td>
+    <td>{{ row.claim.text if row.claim else row.check.claim_id }}
+      {% if row.claim %}<br><a class="small" href="{{ row.claim.source_url | safe_url }}" rel="noopener noreferrer nofollow">{{ row.claim.source_url | domain }}</a>{% endif %}</td>
+    <td>{% if row.records %}
+      <ul class="records">
+      {% for f in row.records %}<li>{{ f.statement }} <a class="small" href="{{ f.source_url | safe_url }}" rel="noopener noreferrer nofollow">{{ f.source_url | domain }}</a></li>{% endfor %}
+      </ul>
+      {% else %}<span class="muted">{{ row.check.status }}: {{ row.check.note }}</span>{% endif %}</td>
   </tr>
   {% endfor %}
 </table>
@@ -60,25 +93,90 @@
 <p class="muted">No claims extracted.</p>
 {% endif %}
 
-<h2>Collectors</h2>
+<h2>Evidence</h2>
+{% for title, reasons in groups %}
+<h3>{{ title }}</h3>
+{% if reasons %}
+<div class="evidence">
+  {% for reason in reasons %}
+  <article class="ev {{ reason.polarity }}">
+    <span class="src">{{ reason.source_url | domain }}</span>
+    <p class="text">{{ reason.text }}</p>
+    {% if reason.quote %}<blockquote>&ldquo;{{ reason.quote }}&rdquo;</blockquote>{% endif %}
+    <a class="link" href="{{ reason.source_url | safe_url }}" rel="noopener noreferrer nofollow">{{ reason.source_url }}</a>
+  </article>
+  {% endfor %}
+</div>
+{% else %}
+<p class="muted">No reasons on this question.</p>
+{% endif %}
+{% endfor %}
+
+{% if red_flags %}
+<h2>Red flags</h2>
+<div class="flags">
+<ul>
+  {% for f in red_flags %}
+  <li><span class="tag">{{ {"breach": "breach", "contradicted_claim": "contradiction", "prompt_injection": "AI-addressed text"}.get(f.topic, "hard flag") }}</span>
+    {{ f.statement }} <a class="small" href="{{ f.source_url | safe_url }}" rel="noopener noreferrer nofollow">{{ f.source_url | domain }}</a></li>
+  {% endfor %}
+</ul>
+</div>
+{% endif %}
+
+<h2>Domain timeline</h2>
+<div class="card">
+<div class="timeline">
+  {% for p in timeline %}
+  <div class="tp{% if not p.url %} today{% endif %}">
+    <div class="dot"></div>
+    <div class="d">{{ p.date | date }}</div>
+    <div class="l">{% if p.url %}<a href="{{ p.url | safe_url }}" rel="noopener noreferrer nofollow">{{ p.label }}</a>{% else %}{{ p.label }}{% endif %}</div>
+  </div>
+  {% endfor %}
+</div>
+{% set shown = timeline | map(attribute="label") | list %}
+{% set missing = ["Domain registered", "First certificate", "First archive capture"] | reject("in", shown) | list %}
+{% if missing %}<p class="muted small">Not on record: {{ missing | join(", ") | lower }}.</p>{% endif %}
+</div>
+
+{% if v.findings %}
+<h2>Findings</h2>
+<div class="evidence">
+  {% for f in v.findings %}
+  <article class="ev">
+    <span class="src">{{ f.source_url | domain }}</span>
+    <p class="text">{{ f.text }}</p>
+    <a class="link" href="{{ f.source_url | safe_url }}" rel="noopener noreferrer nofollow">{{ f.source_url }}</a>
+  </article>
+  {% endfor %}
+</div>
+{% endif %}
+
+<h2>Run trace</h2>
 <table>
-  <tr><th>Collector</th><th class="num">Facts</th><th class="num">Seconds</th><th>Error</th></tr>
+  <tr><th>Collector</th><th></th><th class="num">Facts</th><th class="num">Seconds</th><th>Error</th></tr>
   {% for c in r.collectors %}
-  <tr><td>{{ c.name }}</td><td class="num">{{ c.facts | length }}</td>
+  <tr><td>{{ c.name }}</td>
+      <td>{% if c.error %}<span class="fail">✗</span>{% else %}<span class="ok">✓</span>{% endif %}</td>
+      <td class="num">{{ c.facts | length }}</td>
       <td class="num">{{ "%.1f"|format(c.seconds) }}</td>
       <td class="muted small">{{ c.error }}</td></tr>
   {% endfor %}
+  <tr class="total"><td>Total</td><td></td><td class="num">{{ r.facts | length }}</td>
+      <td class="num">{{ "%.1f"|format(r.seconds) }}</td>
+      <td>{{ r.usage.tavily_credits }} Tavily credits</td></tr>
 </table>
 
 <h2>All facts</h2>
 <details>
 <summary>{{ r.facts | length }} facts, {{ checks | length }} verified or checked</summary>
 <table>
-  <tr><th>Id</th><th>Statement</th><th>Weight</th><th>Check</th></tr>
+  <tr><th>Id</th><th>Statement</th><th class="num">Weight</th><th>Check</th></tr>
   {% for f in r.facts %}
   <tr>
-    <td class="small">{{ f.id }}{% if f.is_hard_flag %} <span class="flag">hard flag</span>{% endif %}</td>
-    <td><span class="{{ f.polarity }}">{{ f.polarity }}</span> {{ f.statement }}
+    <td class="small">{{ f.id }}{% if f.is_hard_flag %} <span class="fail">hard flag</span>{% endif %}</td>
+    <td>{{ f.polarity }}: {{ f.statement }}
         <br><a class="small" href="{{ f.source_url | safe_url }}" rel="noopener noreferrer nofollow">{{ f.source_url }}</a></td>
     <td class="num">{{ "%.2f"|format(f.weight) }}</td>
     <td class="small muted">{% if f.id in checks %}{{ "passed" if checks[f.id].passed else "failed" }}: {{ checks[f.id].note }}{% else %}not checked{% endif %}</td>
