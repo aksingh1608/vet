@@ -33,9 +33,10 @@ Then run `uv run vet validate runs/<smoke-test-id>` to confirm the labels map.
    uv run vet run --file blind.txt --advanced
    ```
 
-   Expect about 1 minute per batch of 5 (3 minutes is the per-product budget). It prints a
-   summary table, the verdict file path, the report path, and whether the file is valid.
-   Advanced search costs 2 credits per search: about 15–20 credits per product.
+   Rehearsal on 26 Nov (5 unseen products, cold cache, `--advanced`): **73 s wall time,
+   74 Tavily credits (12–18 per product)**, valid file, no crash. It prints a summary table
+   (including whether each product has a trust reason), the verdict file path, the report path,
+   and whether the file is valid.
 
 ## 19:05 Check the table
 
@@ -81,7 +82,8 @@ from what did answer, and the error is shown in the `errors` column and the repo
 | Anthropic API errors | The judge falls back to the deterministic rules (confidence 0.3); the site reader cannot extract claims | Wait a minute and rerun the affected products with `--into` |
 | crt.sh slow or down | Optional: age continues with RDAP and Wayback | Nothing |
 | Wayback slow | age may time out (45 s); the other collectors still run | Rerun the product with `--into` |
-| A vendor site answers 403 | No claims from the site; records, search and breach checks still run | Nothing; mention it if asked |
+| A vendor site answers 403 or 429 | No claims from the site; records, search and breach checks still run (Personio answered 429 in the rehearsal) | Optionally rerun that product with `--into` a minute later |
+| Log line `a chunk of N results failed` | The model refused or cut off one chunk of search results (seen once: a security report about the vendor); only that chunk is lost | Nothing; rerun the product with `--into` if it ends with fewer than 4 reasons |
 | Whole run too slow | Products past the budget are judged on what was collected | Raise `VET_PRODUCT_BUDGET_S` (default 180) or split `blind.txt` into two runs |
 
 ## Switch to the phone hotspot

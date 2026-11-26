@@ -27,6 +27,7 @@ PROMPTS_DIR = Path(__file__).parent / "prompts"
 LLM_TIMEOUT_S = 90.0
 LLM_MAX_RETRIES = 2
 DEFAULT_MAX_TOKENS = 8000
+MAX_TOKENS_CEILING = 16000  # a cut-off answer is retried once with twice the budget, up to this
 EFFORT: dict[ModelKind, str] = {"fast": "low", "judge": "medium"}
 
 
@@ -101,6 +102,7 @@ class LLM:
         model = self._models[kind]
         messages: list[dict[str, str]] = [{"role": "user", "content": user}]
         last_error = ""
+        budget = max_tokens
         for attempt in range(2):  # first try + one repair retry
             if last_error:
                 messages = [
@@ -113,19 +115,29 @@ class LLM:
                         ),
                     },
                 ]
-            response = await self._client.messages.parse(
-                model=model,
-                max_tokens=max_tokens,
-                system=system,
-                messages=messages,
-                output_format=output,
-                output_config={"effort": EFFORT[kind]},
-            )
+            try:
+                response = await self._client.messages.parse(
+                    model=model,
+                    max_tokens=budget,
+                    system=system,
+                    messages=messages,
+                    output_format=output,
+                    output_config={"effort": EFFORT[kind]},
+                )
+            except ValidationError as exc:
+                # The SDK parses the JSON itself; a cut-off answer fails here, before we can
+                # look at stop_reason. Retry once with a larger budget and a shorter answer.
+                logger.warning("%s: structured output did not parse (attempt %d)", step, attempt)
+                trace.emit({"event": "llm_parse_error", "step": step, "attempt": attempt})
+                last_error = f"the answer was not valid JSON ({exc.errors()[0]['msg']}); be concise"
+                budget = min(budget * 2, MAX_TOKENS_CEILING)
+                continue
             self._log_usage(step, model, attempt, response)
             if response.stop_reason == "refusal":
                 raise LLMError(f"{step}: model refused")
             if response.stop_reason == "max_tokens":
                 last_error = "the answer was cut off at max_tokens; be more concise"
+                budget = min(budget * 2, MAX_TOKENS_CEILING)
                 continue
             parsed = response.parsed_output
             if parsed is not None:

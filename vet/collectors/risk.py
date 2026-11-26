@@ -21,14 +21,13 @@ from datetime import UTC, datetime
 
 from pydantic import BaseModel
 
-from vet import guard
 from vet.collectors.base import Context, fact_id
-from vet.collectors.footprint import search_name
-from vet.llm import load_prompt, untrusted
+from vet.collectors.classify import classify_in_chunks
+from vet.collectors.footprint import search_name, vendor_payload
 from vet.schemas import Axis, Fact, Polarity, SourceKind
 from vet.sources import REPUTABLE_TYPES, source_type_for
 from vet.tavily import TavilyResult
-from vet.text import contains_quote, registered_domain, same_site, truncate
+from vet.text import contains_quote, registered_domain, same_site
 
 logger = logging.getLogger(__name__)
 
@@ -222,31 +221,16 @@ async def news_facts(ctx: Context, today: datetime, start: int) -> list[Fact]:
     results = list(seen.values())[:MAX_RESULTS_TO_CLASSIFY]
     if not results:
         return []
-    payload = {
-        "vendor": {
-            "name": ctx.identity.vendor_name,
-            "product": ctx.identity.product_name,
-            "domain": ctx.domain,
-            "legal_entity": ctx.identity.legal_entity,
-            "country": ctx.identity.country,
-        },
-        "results": [
-            {
-                "url": r.url,
-                "title": guard.scrub_text(r.title),
-                "content": guard.scrub_text(truncate(r.content, SNIPPET_CHARS)),
-            }
-            for r in results
-        ],
-    }
-    out = await ctx.llm.structured(
-        kind="fast",
-        system=load_prompt("risk_results.md"),
-        user=untrusted(json.dumps(payload, ensure_ascii=False)),
+    items: list[_Item] = await classify_in_chunks(
+        ctx.llm,
+        prompt="risk_results.md",
+        vendor=vendor_payload(ctx),
+        results=results,
         output=_Classified,
         step="classify_risk",
+        snippet_chars=SNIPPET_CHARS,
     )
-    return news_facts_from(out.items, seen, ctx, today, start)
+    return news_facts_from(items, seen, ctx, today, start)
 
 
 async def collect(ctx: Context) -> list[Fact]:

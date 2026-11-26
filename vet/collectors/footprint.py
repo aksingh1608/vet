@@ -9,19 +9,17 @@ Gartner, LinkedIn, North Data) are kept: those pages are never fetched, and the 
 content is the quote. Directory listings are filler; negative review scores are a minor signal.
 """
 
-import json
 import logging
 from datetime import UTC, datetime
 
 from pydantic import BaseModel
 
-from vet import guard
 from vet.collectors.base import Context, fact_id
-from vet.llm import load_prompt, untrusted
+from vet.collectors.classify import classify_in_chunks
 from vet.schemas import Axis, Fact, Polarity, SourceKind
 from vet.sources import review_statement, source_type_for
 from vet.tavily import TavilyResult
-from vet.text import contains_quote, same_site, truncate
+from vet.text import contains_quote, same_site
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +60,16 @@ class _Item(BaseModel):
 
 class _Classified(BaseModel):
     items: list[_Item]
+
+
+def vendor_payload(ctx: Context) -> dict[str, str]:
+    return {
+        "name": ctx.identity.vendor_name,
+        "product": ctx.identity.product_name,
+        "domain": ctx.domain,
+        "legal_entity": ctx.identity.legal_entity,
+        "country": ctx.identity.country,
+    }
 
 
 def search_name(ctx: Context) -> str:
@@ -108,32 +116,17 @@ async def collect(ctx: Context) -> list[Fact]:
     if not results:
         return []
 
-    payload = {
-        "vendor": {
-            "name": ctx.identity.vendor_name,
-            "product": ctx.identity.product_name,
-            "domain": ctx.domain,
-            "legal_entity": ctx.identity.legal_entity,
-            "country": ctx.identity.country,
-        },
-        "results": [
-            {
-                "url": r.url,
-                "title": guard.scrub_text(r.title),
-                "content": guard.scrub_text(truncate(r.content, SNIPPET_CHARS)),
-            }
-            for r in results
-        ],
-    }
-    out = await ctx.llm.structured(
-        kind="fast",
-        system=load_prompt("classify_results.md"),
-        user=untrusted(json.dumps(payload, ensure_ascii=False)),
+    items: list[_Item] = await classify_in_chunks(
+        ctx.llm,
+        prompt="classify_results.md",
+        vendor=vendor_payload(ctx),
+        results=results,
         output=_Classified,
         step="classify_footprint",
+        snippet_chars=SNIPPET_CHARS,
     )
     facts: list[Fact] = []
-    for item in out.items:
+    for item in items:
         source = seen.get(item.url)
         if source is None or not item.relevant or not item.independent:
             continue
