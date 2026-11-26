@@ -173,31 +173,55 @@ def neg(fid: str, collector: str, topic: str, url: str, **kw: object) -> Fact:
 
 
 def test_one_source_is_enough_only_for_records_press_and_vendor_negatives() -> None:
-    hibp = neg(
-        "risk-0", "risk", "breach", "https://haveibeenpwned.com/PwnedWebsites#X",
-        source_kind=SourceKind.RECORD,
-    )  # fmt: skip
+    from vet.verify import one_source_enough
+
+    hibp = neg("risk-0", "risk", "breach", "https://haveibeenpwned.com/PwnedWebsites#X",
+               source_kind=SourceKind.RECORD)  # fmt: skip
     press = neg("risk-10", "risk", "lawsuit", "https://www.reuters.com/a", source_type="press")
-    shutdown = neg(
-        "risk-11", "risk", "discontinued", "https://x.example/goodbye",
-        source_kind=SourceKind.VENDOR, source_type="vendor",
-    )  # fmt: skip
+    shutdown = neg("risk-11", "risk", "discontinued", "https://x.example/goodbye",
+                   source_kind=SourceKind.VENDOR, source_type="vendor")  # fmt: skip
+    linkedin = neg("fp-7", "footprint", "layoffs", "https://www.linkedin.com/posts/a",
+                   source_type="social")  # fmt: skip
+    blog = neg("fp-8", "footprint", "fine", "https://someblog.example/x", source_type="blog")
+    assert [one_source_enough(f) for f in (hibp, press, shutdown, linkedin, blog)] == [
+        True, True, True, False, False,
+    ]  # fmt: skip
+
+
+def test_single_source_social_and_blogs_need_a_second_site() -> None:
     linkedin = neg("fp-7", "footprint", "layoffs", "https://www.linkedin.com/posts/a",
                    source_type="social")  # fmt: skip
     blog = neg("fp-8", "footprint", "fine", "https://someblog.example/x", source_type="blog")
     blog_too = neg("risk-12", "risk", "unconfirmed_fine", "https://other.example/y",
                    source_type="blog")  # fmt: skip
     unverified = neg("risk-13", "risk", "insolvency", "https://www.ft.com/z", source_type="press")
-    facts = {f.id: f for f in (hibp, press, shutdown, linkedin, blog, blog_too, unverified)}
-    passed = set(facts) - {"risk-13"}
-    findings, notes = select_findings(list(facts), facts, passed)
-    kept = [f.fact_id for f in findings]
-    assert kept[:3] == ["risk-0", "risk-10", "risk-11"]  # record, press, vendor's own notice
-    assert "fp-7" not in kept  # a social post alone is never a finding
-    assert {"fp-8", "risk-12"} <= set(kept)  # two blogs on the same topic corroborate
-    assert all(f.source_url.startswith("https://") for f in findings)
+    facts = {f.id: f for f in (linkedin, blog, blog_too, unverified)}
+    findings, notes = select_findings(list(facts), facts, set(facts) - {"risk-13"})
+    assert {f.fact_id for f in findings} == {"fp-8", "risk-12"}  # two blogs corroborate
     assert any("fp-7" in n and "second independent source" in n for n in notes)
-    assert any("risk-13" in n for n in notes)  # not verified
+    assert any("risk-13" in n for n in notes)
+
+
+def test_findings_are_capped_at_three_strongest_first_contradictions_always() -> None:
+    contradiction = neg(
+        "claims_check-0",
+        "claims_check",
+        "contradicted_claim",
+        "https://x.example/about",
+        source_kind=SourceKind.VENDOR,
+        weight=0.3,
+    )
+    breach = neg("risk-0", "risk", "breach", "https://haveibeenpwned.com/PwnedWebsites#X",
+                 source_kind=SourceKind.RECORD, is_hard_flag=True, weight=0.8)  # fmt: skip
+    lawsuit = neg("risk-10", "risk", "lawsuit", "https://www.reuters.com/a",
+                  source_type="press", weight=0.4)  # fmt: skip
+    strong_review = fact("fp-1", "footprint", weight=0.6, source_type="press",
+                         source_url="https://www.heise.de/a")  # fmt: skip
+    weak = fact("fp-2", "footprint", weight=0.2, source_url="https://other.example/b")
+    facts = {f.id: f for f in (weak, strong_review, lawsuit, breach, contradiction)}
+    findings, _ = select_findings([], facts, set(facts))
+    # contradiction first despite its low weight; then hard flag; then real negative; max 3
+    assert [f.fact_id for f in findings] == ["claims_check-0", "risk-0", "risk-10"]
 
 
 def test_findings_never_repeat_a_reason() -> None:
@@ -261,3 +285,35 @@ def test_record_publishers_and_social_sites_are_typed_by_domain() -> None:
     assert source_type_for("https://www.youtube.com/watch?v=1", "press") == "social"
     assert source_type_for("https://www.reuters.com/a", "press") == "press"
     assert source_type_for("https://www.reuters.com/a", "nonsense") == "other"
+
+
+def test_finding_only_breach_becomes_the_trust_reason_when_nothing_else_covers_trust() -> None:
+    from vet.verify import breach_reason
+
+    hibp = neg("risk-0", "risk", "breach", "https://haveibeenpwned.com/PwnedWebsites#X",
+               source_kind=SourceKind.RECORD, statement="Have I Been Pwned lists a breach of X "
+               "dated 2019-05-24 affecting 1,000 accounts")  # fmt: skip
+    notice = neg("risk-11", "risk", "breach", "https://x.example/incident",
+                 source_kind=SourceKind.VENDOR, tags=["disclosed"])  # fmt: skip
+    ranked = [*age_facts(), fact("fp-0", "footprint"), fact("fp-1", "c2")]
+    facts = {f.id: f for f in [*ranked, hibp, notice]}
+    only = frozenset({"risk-0", "risk-11"})
+
+    reason = breach_reason(only, facts, set(facts))
+    assert reason is not None and reason.fact_id == "risk-0"  # the record, not the notice
+    assert reason.text.endswith("; the vendor disclosed it (x.example)")
+    reasons, notes = select_reasons(ranked, set(facts), "x.example", only, reason)
+    assert reasons[-1].fact_id == "risk-0" and reasons[-1].axis == Axis.TRUST
+    assert any("used as the trust reason" in n for n in notes)
+
+    # disclosure is only mentioned when the disclosure source itself verified
+    unverified = breach_reason(only, facts, set(facts) - {"risk-11"})
+    assert unverified is not None and "disclosed" not in unverified.text
+
+    # and the breach is then never a finding as well: neither the record nor the notice
+    from vet.verify import used_by_reasons
+
+    used = used_by_reasons(reasons, facts, set(facts), only)
+    assert {"risk-0", "risk-11"} <= used
+    findings, _ = select_findings(["risk-0", "risk-11"], facts, set(facts), used)
+    assert not {"risk-0", "risk-11"} & {f.fact_id for f in findings}

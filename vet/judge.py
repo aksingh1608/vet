@@ -9,7 +9,16 @@
    * mixed review scores are a minor negative that never enters the scores;
    * breaches: one younger than ``breach_recent_years`` or never disclosed by the vendor makes
      trust "caution". An older, disclosed breach at a vendor that meets the trust floor keeps
-     "trust" and becomes a finding, not a reason.
+     "trust" and becomes a finding, not a reason;
+   * the age records (RDAP, crt.sh, Wayback) are ONE signal: they count once, at the weight of
+     the strongest, so a young domain is not three pieces of evidence;
+   * "no" needs two independent negative signals (age counts as one); "do_not_trust" needs a
+     red flag (a trust hard flag, a contradicted claim, or the hollow pattern);
+   * a vendor younger than YOUNG_VENDOR_YEARS has no track record: trust at most "caution";
+   * hollow pattern (records < 1 year old + founding year claimed far earlier + a checkable dead
+     page or contradiction + no positive record or independent evidence) -> "no" and
+     "do_not_trust". The absence of evidence only gates the pattern; it is never a reason;
+   * a corroborated shutdown ("discontinued" hard flag) -> real_alive "no".
 2. LLM judge: picks labels within the allowed set and ranks fact ids (reasons and findings).
    Reasons and findings are built in code from verified facts, so no source can be invented.
 """
@@ -40,6 +49,10 @@ MAX_FINDINGS = 5
 
 DEFAULT_BREACH_RECENT_YEARS = 3
 TRUST_FLOOR_HISTORY_YEARS = 10.0
+YOUNG_VENDOR_YEARS = 2.0
+HOLLOW_MAX_YEARS = 1.0
+AGE_COLLECTOR = "age"
+CHECKABLE_HOLLOW_SIGNS = frozenset({"missing_page", "dead_help", "contradicted_claim"})
 TRUST_FLOOR_INDEPENDENT_SOURCES = 2
 AGE_EVIDENCE_TOPICS = frozenset({"domain_registered", "first_capture", "first_certificate"})
 # Negatives that may lower trust below the floor.
@@ -97,6 +110,31 @@ def assess_breaches(
 
 def _sum(facts: list[Fact], axis: Axis, polarity: Polarity) -> float:
     return round(sum(f.weight for f in facts if f.axis == axis and f.polarity == polarity), 3)
+
+
+def _signal_sum(facts: list[Fact], axis: Axis, polarity: Polarity) -> float:
+    """Like _sum, but all age records together count once (the strongest)."""
+    picked = [f for f in facts if f.axis == axis and f.polarity == polarity]
+    age = [f.weight for f in picked if f.collector == AGE_COLLECTOR]
+    rest = sum(f.weight for f in picked if f.collector != AGE_COLLECTOR)
+    return round(rest + max(age, default=0.0), 3)
+
+
+def _signal_count(facts: list[Fact], axis: Axis, polarity: Polarity) -> int:
+    """Independent signals: every non-age fact, plus one for any number of age records."""
+    picked = [f for f in facts if f.axis == axis and f.polarity == polarity]
+    rest = sum(1 for f in picked if f.collector != AGE_COLLECTOR)
+    return rest + (1 if any(f.collector == AGE_COLLECTOR for f in picked) else 0)
+
+
+def is_hollow(facts: list[Fact], years: float, positive_sources: set[str]) -> bool:
+    """A site that presents a long past with nothing behind it: every domain record under a
+    year old, a founding year claimed long before that, at least one checkable dead page or
+    contradiction, and no positive record or independent evidence at all."""
+    young = 0.0 < years < HOLLOW_MAX_YEARS
+    gap = any(f.topic in ("founding_year_gap", "contradicted_claim") for f in facts)
+    checkable = any(f.topic in CHECKABLE_HOLLOW_SIGNS for f in facts)
+    return young and gap and checkable and not positive_sources
 
 
 def is_forced(fact: Fact) -> bool:
@@ -164,13 +202,11 @@ def apply_rules(
     scored = [f for f in counted if f.collector not in TIE_BREAK_COLLECTORS and not is_minor(f)]
     evidence = [f for f in scored if f.source_kind != SourceKind.VENDOR]
 
-    ra_pos = _sum(evidence, Axis.REAL_ALIVE, Polarity.POSITIVE)
-    ra_neg = _sum(scored, Axis.REAL_ALIVE, Polarity.NEGATIVE)
+    ra_pos = _signal_sum(evidence, Axis.REAL_ALIVE, Polarity.POSITIVE)
+    ra_neg = _signal_sum(scored, Axis.REAL_ALIVE, Polarity.NEGATIVE)
     tr_pos = _sum(evidence, Axis.TRUST, Polarity.POSITIVE)
     tr_neg = _sum(scored, Axis.TRUST, Polarity.NEGATIVE)
-    ra_neg_count = sum(
-        1 for f in scored if f.axis == Axis.REAL_ALIVE and f.polarity == Polarity.NEGATIVE
-    )
+    ra_neg_count = _signal_count(scored, Axis.REAL_ALIVE, Polarity.NEGATIVE)
     # Breaches have their own rule (below); every other hard flag caps as before.
     hard = [f for f in counted if f.is_hard_flag and not is_breach(f)]
     hard_ra = [f for f in hard if f.axis == Axis.REAL_ALIVE]
@@ -245,6 +281,28 @@ def apply_rules(
                 f"sources, no hard flags or real negatives -> trust"
             )
 
+    # Red-flag gates, applied last so they override the softer rules above.
+    contradicted = any(f.topic == "contradicted_claim" for f in counted)
+    hollow = is_hollow(eligible, years, sources)
+    shutdown = [f for f in hard_ra if f.topic == "discontinued"]
+    if hollow:
+        allowed_ra, allowed_tr = [RealAlive.NO], [Trust.DO_NOT_TRUST]
+        notes.append(
+            f"hollow pattern: records only {years:g} years old, a founding year claimed long "
+            "before, dead pages or contradictions, and no positive evidence -> no, do_not_trust"
+        )
+    else:
+        if shutdown:
+            allowed_ra = [RealAlive.NO]
+            notes.append("real_alive=no: a corroborated shutdown of this product")
+        if 0.0 < years < YOUNG_VENDOR_YEARS and Trust.TRUST in allowed_tr:
+            allowed_tr = [t for t in allowed_tr if t != Trust.TRUST] or [Trust.CAUTION]
+            notes.append(f"trust capped at caution: only {years:g} years of history")
+        if not (hard_tr or contradicted) and len(allowed_tr) > 1:
+            allowed_tr = [t for t in allowed_tr if t != Trust.DO_NOT_TRUST]
+        if not (hard_tr or contradicted) and allowed_tr == [Trust.DO_NOT_TRUST]:
+            allowed_tr = [Trust.CAUTION]
+
     return RuleOutcome(
         allowed_real_alive=allowed_ra,
         allowed_trust=allowed_tr,
@@ -260,6 +318,8 @@ def apply_rules(
             "real_negatives": float(len(real_negatives)),
             "breaches_blocking": float(len(breaches.blocking)),
             "breaches_old_disclosed": float(len(breaches.old_disclosed)),
+            "real_alive_negative_signals": float(ra_neg_count),
+            "hollow": float(hollow),
         },
         notes=notes,
         finding_only=finding_only,
