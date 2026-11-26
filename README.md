@@ -32,11 +32,13 @@ flowchart LR
 ```
 
 - **The vendor's site gives claims, never evidence.** Evidence comes from records (RDAP, certificate logs,
-  the Wayback Machine, company registers, Have I Been Pwned) and independent sources.
+  the Wayback Machine, company registers, Have I Been Pwned) and independent sources. A claim is
+  confirmed only when a record states the same number, name, year or identifier.
 - **Labels are decided in code.** Each verified fact has a weight and a direction; fixed thresholds turn
   the score into a label. The model only writes the summary and ranks the reasons.
 - **Every reason is verified.** Its source is checked again for what the reason says. A reason that fails
-  is dropped, and the labels are recomputed without it.
+  is dropped, and the labels are recomputed without it. A search tool's own page (such as Tavily's
+  generated company profiles) is never a source.
 - **Believing everything and doubting everything both fail.** "no" needs two independent negative
   signals; "do_not_trust" needs a red flag (a breach, a contradicted claim, or the hollow pattern).
 - **Absence is stated only from a checkable record.** "Our searches found nothing" is never a reason.
@@ -50,7 +52,12 @@ mentions.
 ![Report for the synthetic hollow-vendor scenario: no / do not trust](docs/img/hollow-scenario.png)
 
 Projektron, from one of our own rehearsal runs: a registered Berlin company with a 25-year archive
-history and independent reviews.
+history and independent reviews. The saved run was re-derived offline with the current code:
+- Search-tool pages were dropped.
+- The claims were checked again.
+- Labels and reasons were recomputed from the saved verification results.
+
+The summary and confidence come from the original run.
 
 ![Report for projektron.de: yes / trust](docs/img/projektron.png)
 
@@ -87,7 +94,7 @@ history and independent reviews.
   changed, not the model.
 - **Rehearsal timing** (11 products, cold caches): 59.6 s and 20.2 Tavily credits per product on average,
   about 188 s for the whole run at 4 products in parallel.
-- **Tests:** 272, all offline.
+- **Tests:** 279, all offline.
 
 ## Limitations
 
