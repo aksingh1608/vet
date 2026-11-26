@@ -12,11 +12,14 @@ import csv
 import json
 import logging
 import re
+from datetime import datetime
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from jinja2 import Environment, PackageLoader, select_autoescape
 
 from vet.output import ProductRecord, find_verdict_file, load_records, product_slug
+from vet.schemas import Axis, Fact, Polarity
 from vet.text import registered_domain
 
 logger = logging.getLogger(__name__)
@@ -24,6 +27,16 @@ logger = logging.getLogger(__name__)
 LABELLED_DIR = Path("data") / "labelled"
 HIBP_URL = "https://haveibeenpwned.com"
 _DOMAIN = re.compile(r"\b(?:https?://)?((?:[a-z0-9-]+\.)+[a-z]{2,})\b", re.I)
+
+
+# Presentation only: which facts the report shows where. Nothing here changes a verdict.
+RED_FLAG_TOPICS = frozenset({"breach", "contradicted_claim", "prompt_injection"})
+TIMELINE_TOPICS = (
+    ("domain_registered", "Domain registered"),
+    ("first_certificate", "First certificate"),
+    ("first_capture", "First archive capture"),
+)
+MAX_CLAIM_RECORDS = 3
 
 
 class PublicExportRefused(RuntimeError):
@@ -34,6 +47,63 @@ def safe_url(url: str) -> str:
     return url if url.startswith(("https://", "http://")) else "#"
 
 
+def source_domain(url: str) -> str:
+    host = urlsplit(url).hostname or ""
+    return registered_domain(host) if host else ""
+
+
+def _failed(fact_id: str, checks: dict) -> bool:
+    check = checks.get(fact_id)
+    return check is not None and not check.passed
+
+
+def red_flags(record: ProductRecord, checks: dict) -> list[Fact]:
+    """Hard flags, breaches, contradictions and injection hits that did not fail verification."""
+    return [
+        f
+        for f in record.facts
+        if f.polarity == Polarity.NEGATIVE
+        and (f.is_hard_flag or f.topic in RED_FLAG_TOPICS)
+        and not _failed(f.id, checks)
+    ]
+
+
+def timeline(record: ProductRecord) -> list[dict]:
+    """Registered, first certificate, first capture (those on record), then the run date."""
+    points = []
+    for topic, label in TIMELINE_TOPICS:
+        dates = [(f.observed_at, f) for f in record.facts if f.topic == topic and f.observed_at]
+        if dates:
+            when, fact = min(dates, key=lambda d: d[0])
+            points.append({"label": label, "date": when, "url": fact.source_url})
+    points.sort(key=lambda p: p["date"])
+    points.append({"label": "Today", "date": record.verdict.created_at, "url": ""})
+    return points
+
+
+def claim_rows(record: ProductRecord, facts: dict[str, Fact]) -> list[dict]:
+    claims = {c.id: c for c in record.claims}
+    rows = []
+    for check in record.claim_checks:
+        claim = claims.get(check.claim_id)
+        records = [facts[i] for i in check.fact_ids if i in facts][:MAX_CLAIM_RECORDS]
+        rows.append({"claim": claim, "check": check, "records": records})
+    order = {"contradicted": 0, "confirmed": 1, "unconfirmed": 2}
+    return sorted(rows, key=lambda r: order[r["check"].status])
+
+
+def reason_groups(record: ProductRecord) -> list[tuple[str, list]]:
+    reasons = record.verdict.reasons
+    return [
+        (title, [r for r in reasons if r.axis == axis])
+        for axis, title in ((Axis.REAL_ALIVE, "Real & alive"), (Axis.TRUST, "Trust"))
+    ]
+
+
+def _date(value: datetime | None) -> str:
+    return value.strftime("%Y-%m-%d") if value else "unknown"
+
+
 def _env() -> Environment:
     env = Environment(
         loader=PackageLoader("vet", "templates"),
@@ -42,6 +112,8 @@ def _env() -> Environment:
         lstrip_blocks=True,
     )
     env.filters["safe_url"] = safe_url
+    env.filters["domain"] = source_domain
+    env.filters["date"] = _date
     return env
 
 
@@ -102,7 +174,15 @@ def render(
         path = out_dir / f"{slug}.html"
         path.write_text(
             env.get_template("report.html.j2").render(
-                r=record, v=record.verdict, facts=facts, checks=checks, hibp_url=HIBP_URL
+                r=record,
+                v=record.verdict,
+                facts=facts,
+                checks=checks,
+                hibp_url=HIBP_URL,
+                groups=reason_groups(record),
+                claim_rows=claim_rows(record, facts),
+                red_flags=red_flags(record, checks),
+                timeline=timeline(record),
             ),
             encoding="utf-8",
         )

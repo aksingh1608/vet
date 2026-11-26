@@ -6,50 +6,43 @@
 <meta name="referrer" content="no-referrer">
 <title>{% block title %}vet{% endblock %}</title>
 <style>
+  /* Self-contained: no external fonts, scripts or stylesheets (works offline on a projector). */
   :root {
-    --ink: #1d2026; --muted: #5d6472; --line: #e3e5ea; --bg: #fafaf8; --card: #fff;
-    --good: #1f7a4d; --good-bg: #e6f4ec; --warn: #9a6200; --warn-bg: #fdf3dc;
-    --bad: #b3261e; --bad-bg: #fbe9e7; --neutral-bg: #eef0f3;
-  }
-  @media (prefers-color-scheme: dark) {
-    :root {
-      --ink: #e7e9ee; --muted: #a0a6b3; --line: #2e323b; --bg: #15171b; --card: #1c1f25;
-      --good: #6fd19c; --good-bg: #173326; --warn: #f0c060; --warn-bg: #3a2e12;
-      --bad: #ff8a80; --bad-bg: #3d1a18; --neutral-bg: #262a31;
-    }
+    --ink: #111418; --muted: #4a5260; --line: #d9dce2; --bg: #f6f7f9; --card: #ffffff;
+    --good: #146c43; --good-bg: #e3f3ea; --warn: #8a5300; --warn-bg: #fdf0d2;
+    --bad: #b42318; --bad-bg: #fde8e6; --neutral-bg: #eceef2; --accent: #1f4fd1;
   }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--ink);
-         font: 15px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif; }
-  main { max-width: 980px; margin: 0 auto; padding: 32px 20px 48px; }
-  h1 { font-size: 24px; margin: 0 0 4px; word-break: break-all; }
-  h2 { font-size: 16px; margin: 32px 0 10px; text-transform: uppercase; letter-spacing: .04em;
-       color: var(--muted); }
-  a { color: inherit; }
+         font: 19px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue",
+               Arial, sans-serif; -webkit-font-smoothing: antialiased; }
+  main { max-width: 1180px; margin: 0 auto; padding: 36px 28px 56px; }
+  h1 { font-size: 40px; line-height: 1.15; margin: 0; letter-spacing: -.01em; }
+  h2 { font-size: 26px; margin: 44px 0 14px; letter-spacing: -.005em; }
+  h3 { font-size: 21px; margin: 22px 0 10px; color: var(--muted); }
+  a { color: var(--accent); text-underline-offset: 3px; }
   .muted { color: var(--muted); }
-  .small { font-size: 13px; }
-  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px;
-          padding: 16px 18px; }
-  .labels { display: flex; gap: 10px; flex-wrap: wrap; margin: 14px 0; }
-  .pill { display: inline-block; padding: 3px 10px; border-radius: 999px; font-weight: 600;
-          font-size: 13px; background: var(--neutral-bg); }
+  .small { font-size: 16px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+          padding: 20px 24px; }
+  .pill { display: inline-block; padding: 4px 14px; border-radius: 999px; font-weight: 700;
+          font-size: 16px; background: var(--neutral-bg); white-space: nowrap; }
   .yes, .trust { background: var(--good-bg); color: var(--good); }
   .unclear, .caution { background: var(--warn-bg); color: var(--warn); }
   .no, .do_not_trust { background: var(--bad-bg); color: var(--bad); }
-  .positive { color: var(--good); } .negative { color: var(--bad); }
-  ol.reasons { padding-left: 22px; margin: 0; }
-  ol.reasons li { margin: 0 0 14px; }
-  .quote { margin: 4px 0 0; padding-left: 10px; border-left: 3px solid var(--line);
-           color: var(--muted); font-size: 13px; }
-  table { width: 100%; border-collapse: collapse; font-size: 14px; }
-  th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--line);
+  table { width: 100%; border-collapse: collapse; background: var(--card);
+          border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+  th, td { text-align: left; padding: 12px 14px; border-bottom: 1px solid var(--line);
            vertical-align: top; }
-  th { font-weight: 600; color: var(--muted); font-size: 12px; text-transform: uppercase; }
-  td.num { text-align: right; font-variant-numeric: tabular-nums; }
-  .flag { color: var(--bad); font-weight: 600; }
-  footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid var(--line);
-           color: var(--muted); font-size: 13px; }
-  details summary { cursor: pointer; color: var(--muted); }
+  tr:last-child td { border-bottom: 0; }
+  th { font-weight: 700; color: var(--muted); font-size: 15px; text-transform: uppercase;
+       letter-spacing: .04em; background: var(--neutral-bg); }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .back { font-size: 17px; margin: 0 0 18px; }
+  footer { margin-top: 56px; padding-top: 18px; border-top: 1px solid var(--line);
+           color: var(--muted); font-size: 16px; }
+  details summary { cursor: pointer; color: var(--muted); font-size: 17px; }
+  {% block style %}{% endblock %}
 </style>
 </head>
 <body>
