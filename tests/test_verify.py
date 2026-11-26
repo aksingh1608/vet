@@ -247,3 +247,44 @@ def test_overclaiming_sentence_falls_back_to_the_verified_quote() -> None:
     assert results["fp-1"].passed and "verbatim quote" in results["fp-1"].note
     assert not results["risk-0"].passed  # a hard flag must stand on its own sentence
     assert not results["site-1"].passed
+
+
+# ---- pages that refuse us: the cached Tavily snippet stands in -----------------------------
+
+
+async def test_refused_page_is_verified_from_the_snippet_and_marked(router_fetcher) -> None:
+    from vet.verify import check_source
+
+    quote = "Ledgerly notified customers of a 2026 breach"
+    fetcher, _ = router_fetcher([("press.example/403", 403), ("press.example/429", 429)])
+    snippets = {
+        "https://press.example/403": f"... {quote} ...",
+        "https://press.example/429": f"... {quote} ...",
+    }
+    async with fetcher:
+        for path, status in (("403", 403), ("429", 429)):
+            f = fact(f"risk-{path}", f"https://press.example/{path}", quote)
+            result = await check_source(f, fetcher, snippets, fetcher.settings)
+            assert result.passed and result.snippet_sourced
+            assert result.note.startswith(f"snippet-sourced: page answered {status}")
+        # a quote the snippet does not hold still fails
+        bad = fact("risk-x", "https://press.example/403", "words that are nowhere")
+        result = await check_source(bad, fetcher, snippets, fetcher.settings)
+        assert not result.passed and not result.snippet_sourced
+
+
+async def test_a_stored_403_gives_the_same_result_on_the_next_run(router_fetcher) -> None:
+    """Verification uses the stored copy: a 403 cached by the first run is not refetched, and
+    the second run reaches the same decision through the same snippet."""
+    from vet.verify import check_source
+
+    quote = "Ledgerly notified customers of a 2026 breach"
+    fetcher, rec = router_fetcher([("press.example/403", 403)])
+    snippets = {"https://press.example/403": f"... {quote} ..."}
+    f = fact("risk-1", "https://press.example/403", quote)
+    async with fetcher:
+        first = await check_source(f, fetcher, snippets, fetcher.settings)
+        page_hits = sum(1 for r in rec.requests if r.url.path == "/403")
+        second = await check_source(f, fetcher, snippets, fetcher.settings)
+    assert first == second and second.snippet_sourced
+    assert sum(1 for r in rec.requests if r.url.path == "/403") == page_hits  # not refetched

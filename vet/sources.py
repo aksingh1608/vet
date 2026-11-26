@@ -163,10 +163,13 @@ def review_count(quote: str) -> int:
 
 def evidence_class(fact: Fact) -> str:
     """strong: records, independent press/regulators/courts, customers naming the vendor,
-    established review platforms with a real review count. weak: launch sites, link
-    directories, paid PR wires, social media (including the vendor's own accounts), activity the
-    vendor controls (its own pages, its GitHub/package releases). normal: everything else."""
+    established review platforms with a real review count, open-source adoption records.
+    weak: launch sites, link directories, paid PR wires, social media (including the vendor's
+    own accounts), activity the vendor controls (its own pages, its GitHub/package releases).
+    normal: everything else."""
     domain = registered_domain(fact.source_url)
+    if fact.topic == "open_source" and fact.source_kind == SourceKind.RECORD:
+        return "strong"  # stars and contributors from others (thresholds in collectors/alive)
     if (
         fact.source_kind == SourceKind.VENDOR
         or fact.collector == "alive"

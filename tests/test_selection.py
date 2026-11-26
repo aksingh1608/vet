@@ -397,8 +397,7 @@ def test_evidence_floor_sentence_when_nothing_else_exists() -> None:
     facts = [*age_facts()[:3]]
     reasons, _ = chain_reasons(facts)
     (trust,) = [r for r in reasons if r.axis == Axis.TRUST]
-    assert trust.text.startswith("Evidence behind the trust call: 32.3 years of domain history")
-    assert "(since 1994-07-30)" in trust.text and "no hard flags or contradictions" in trust.text
+    assert trust.text == "Domain registered 1994-07-30, under 33 years of history"
     assert trust.source_url == "https://lookup.icann.org/en/lookup?name=basecamp.com"
     assert trust.polarity == Polarity.NEUTRAL
 
@@ -410,7 +409,8 @@ def test_negative_or_unverified_facts_are_never_trust_fallbacks() -> None:
     facts[-1] = facts[-1].model_copy(update={"polarity": Polarity.NEGATIVE})
     by_id = {f.id: f for f in facts}
     chain = trust_reason_chain(by_id, {f.id for f in facts} - {"fp-1"})
-    assert [r.fact_id for r in chain] == ["age-0"]  # floor only, linked to the first capture
+    assert [r.fact_id for r in chain] == ["age-0"]  # record sentence only: the first capture
+    assert chain[0].text == "First domain record 2015-09-18, under 12 years of history"
 
 
 def test_evidence_floor_dates_from_real_records_not_the_yearly_capture_history() -> None:
@@ -424,4 +424,5 @@ def test_evidence_floor_dates_from_real_records_not_the_yearly_capture_history()
     ]  # fmt: skip
     reasons, _ = chain_reasons(facts)
     (trust,) = [r for r in reasons if r.axis == Axis.TRUST]
-    assert "1 year of domain history (since 2025-11-22)" in trust.text
+    assert trust.text == "Domain registered 2025-11-22, under 2 years of history"
+    assert "source" not in trust.text and "no " not in trust.text

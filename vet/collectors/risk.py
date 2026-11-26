@@ -13,6 +13,13 @@ vendor itself announces the negative fact (shutdown, breach notice, acquisition)
 (social media, forums, blogs) needs a second independent site; until then it is never a hard
 flag, its weight is halved and its topic is ``unconfirmed_<event>``.
 
+Breach or not is decided in code, not by the model: of the security events the model reports
+("breach", "security_incident"), one is a breach when HIBP lists a breach in the same year or
+its quote has clear breach wording (EN/DE: "data breach", "breach", "Datenleck", "Datenpanne",
+records or customer data exposed, "Kundendaten abgeflossen"). Credential stuffing and explicit
+"not a breach" statements never are. A breach's sentence is the verbatim quote (code-worded),
+so verification does not depend on a model's reading either.
+
 Breaches carry their year (``observed_at``) and a ``disclosed`` tag when the vendor announced
 them, so the judge can tell recent or hidden breaches from old, disclosed ones.
 """
@@ -59,6 +66,20 @@ EVENT_RULES: dict[str, tuple[Axis, Polarity, float, bool]] = {
     "security_incident": (Axis.TRUST, Polarity.NEGATIVE, 0.3, False),
 }
 HARD_SEVERITY = 0.7
+SECURITY_EVENTS = frozenset({"breach", "security_incident"})
+BREACH_WORDING = re.compile(
+    r"\bdata\s+breach(?:es)?\b|\bbreach(?:es)?\b|datenleck|datenpanne"
+    r"|\brecords?\b\W+(?:\w+\W+){0,4}?exposed\b"
+    r"|\bcustomer\s+data\b\W+(?:\w+\W+){0,4}?exposed\b"
+    r"|\bkundendaten\b\W+(?:\w+\W+){0,4}?"
+    r"(?:abgeflossen|offengelegt|gestohlen|entwendet|geleakt|kompromittiert)",
+    re.I,
+)
+NOT_A_BREACH = re.compile(
+    r"credential[\s-]*stuffing|password\s+reuse|reused\s+passwords"
+    r"|\bnot\s+a\s+(?:data\s+)?breach\b|\bno\s+(?:data\s+)?breach\b",
+    re.I,
+)
 EVENTS = tuple(EVENT_RULES)
 
 
@@ -150,11 +171,29 @@ def queries(ctx: Context) -> list[str]:
     return plan
 
 
+def security_event(event: str, quote: str, year: int | None, hibp_years: frozenset[int]) -> str:
+    """The code's decision between "breach" and "security_incident" (other events pass)."""
+    if event not in SECURITY_EVENTS:
+        return event
+    if NOT_A_BREACH.search(quote):
+        return "security_incident"
+    if BREACH_WORDING.search(quote) or (year is not None and year in hibp_years):
+        return "breach"
+    return "security_incident"
+
+
 def news_facts_from(
-    items: list[_Item], seen: dict[str, TavilyResult], ctx: Context, today: datetime, start: int
+    items: list[_Item],
+    seen: dict[str, TavilyResult],
+    ctx: Context,
+    today: datetime,
+    start: int,
+    hibp_years: frozenset[int] = frozenset(),
 ) -> list[Fact]:
     kept: list[tuple[_Item, TavilyResult, bool]] = []
-    for item in items:
+    for raw in items:
+        event = security_event(raw.event, raw.quote, _year(raw.date), hibp_years)
+        item = raw.model_copy(update={"event": event})
         source = seen.get(item.url)
         if source is None or not item.about_this_vendor or item.event not in EVENT_RULES:
             continue
@@ -190,11 +229,16 @@ def news_facts_from(
             # One article is a lead: half weight, never a hard flag, never a real negative.
             weight = round(weight / 2, 2)
             topic = f"unconfirmed_{item.event}"
+        # A breach is stated as its verbatim quote: the code decided it, not a model's sentence.
+        breach = item.event == "breach"
         facts.append(
             Fact(
                 id=fact_id(NAME, start + len(facts)),
                 collector=NAME,
-                statement=item.statement,
+                statement=f'{registered_domain(item.url)}: "{item.quote.strip()}"'
+                if breach
+                else item.statement,
+                code_worded=breach,
                 axis=axis,
                 polarity=polarity,
                 weight=weight,
@@ -217,7 +261,9 @@ def _year(text: str) -> int | None:
     return int(m.group(1)) if m else None
 
 
-async def news_facts(ctx: Context, today: datetime, start: int) -> list[Fact]:
+async def news_facts(
+    ctx: Context, today: datetime, start: int, hibp_years: frozenset[int] = frozenset()
+) -> list[Fact]:
     if ctx.tavily is None:
         return []
     seen: dict[str, TavilyResult] = {}
@@ -237,7 +283,7 @@ async def news_facts(ctx: Context, today: datetime, start: int) -> list[Fact]:
         step="classify_risk",
         snippet_chars=SNIPPET_CHARS,
     )
-    return news_facts_from(items, seen, ctx, today, start)
+    return news_facts_from(items, seen, ctx, today, start, hibp_years)
 
 
 async def collect(ctx: Context) -> list[Fact]:
@@ -247,6 +293,7 @@ async def collect(ctx: Context) -> list[Fact]:
         facts += await hibp_facts(ctx, today)
     except Exception as exc:  # noqa: BLE001 - one source failing must not lose the other
         logger.warning("risk/hibp failed for %s: %s", ctx.domain, exc)
-    facts += await news_facts(ctx, today, start=10)
+    years = frozenset(f.observed_at.year for f in facts if f.observed_at)
+    facts += await news_facts(ctx, today, start=10, hibp_years=years)
     logger.info("risk %s: %d facts", ctx.domain, len(facts))
     return facts

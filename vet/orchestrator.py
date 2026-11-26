@@ -114,7 +114,7 @@ async def run_product(url: str, deps: Deps) -> tuple[ProductRecord, trace.Trace]
     tasks: dict[str, asyncio.Task[CollectorResult]] = {
         "age": asyncio.create_task(run_collector("age", age.collect, ctx, timeout))
     }
-    report, site_result = await _site(ctx, timeout)
+    report, site_result = await _site(ctx, settings.site_reader_timeout_s)
     if report is not None:
         ctx.claims, ctx.identity, ctx.pages = report.claims, report.identity, report.pages
     # Run even when the homepage is unreadable (e.g. a WAF answers 403): search and breach

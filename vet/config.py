@@ -15,12 +15,14 @@ DEFAULT_JUDGE_MODEL = "claude-opus-5-5"
 DEFAULT_FAST_MODEL = "claude-haiku-5-5"
 DEFAULT_PRODUCT_BUDGET_S = 180.0
 DEFAULT_COLLECTOR_TIMEOUT_S = 45.0
+# The site reader may fall back to Wayback copies, which share a 20 req/min limit.
+DEFAULT_SITE_READER_TIMEOUT_S = 75.0
 DEFAULT_FETCH_TIMEOUT_S = 15.0
 DEFAULT_CONNECT_TIMEOUT_S = 5.0
 DEFAULT_HOST_INTERVAL_S = 1.0
 DEFAULT_MAX_RETRIES = 2
 DEFAULT_BACKOFF_BASE_S = 1.0
-DEFAULT_MAX_PARALLEL_PRODUCTS = 5
+DEFAULT_MAX_PARALLEL_PRODUCTS = 4  # fewer products sharing the Wayback limit at once
 DEFAULT_BREACH_RECENT_YEARS = 3
 OutputFormat = Literal["json", "csv"]
 OUTPUT_FORMATS: tuple[str, ...] = ("json", "csv")
@@ -91,6 +93,7 @@ class Settings(BaseModel):
 
     product_budget_s: float = DEFAULT_PRODUCT_BUDGET_S
     collector_timeout_s: float = DEFAULT_COLLECTOR_TIMEOUT_S
+    site_reader_timeout_s: float = DEFAULT_SITE_READER_TIMEOUT_S
     fetch_timeout_s: float = DEFAULT_FETCH_TIMEOUT_S
     connect_timeout_s: float = DEFAULT_CONNECT_TIMEOUT_S
     max_retries: int = DEFAULT_MAX_RETRIES
@@ -158,6 +161,7 @@ class Settings(BaseModel):
             ("fast_model", "FAST_MODEL"),
             ("product_budget_s", "VET_PRODUCT_BUDGET_S"),
             ("collector_timeout_s", "VET_COLLECTOR_TIMEOUT_S"),
+            ("site_reader_timeout_s", "VET_SITE_READER_TIMEOUT_S"),
             ("fetch_timeout_s", "VET_FETCH_TIMEOUT_S"),
             ("contact", "VET_CONTACT"),
             ("cache_path", "VET_CACHE_PATH"),
