@@ -94,7 +94,9 @@ async def test_northdata_quote_not_in_snippet_is_dropped(router_fetcher) -> None
     llm = FakeLLM({_Records: lambda user: nd_records(quote="Founded 1887 by royal decree")})
     async with fetcher:
         facts = await legal_id.collect(make_ctx(fetcher, llm, DE))
-    assert facts == []
+    # the invented quote yields nothing; only the code-matched register URL remains
+    assert [f.topic for f in facts] == ["register_record"]
+    assert facts[0].quote == "" and "1887" not in facts[0].statement
 
 
 UK = SiteIdentity(
@@ -150,3 +152,39 @@ async def test_no_legal_entity_means_no_lookups(router_fetcher) -> None:
     async with fetcher:
         facts = await legal_id.collect(make_ctx(fetcher, FakeLLM(), SiteIdentity()))
     assert facts == [] and rec.requests == []
+
+
+def test_north_data_url_naming_entity_and_number_is_a_record(router_fetcher) -> None:
+    from datetime import UTC, datetime
+
+    from vet.collectors.base import Context, SiteIdentity
+    from vet.collectors.legal_id import url_record_fact
+
+    fetcher, _ = router_fetcher([])
+    ctx = Context(
+        url="https://www.projektron.de/",
+        domain="projektron.de",
+        settings=fetcher.settings,
+        fetcher=fetcher,
+        llm=None,  # type: ignore[arg-type]
+        tavily=None,
+        identity=SiteIdentity(
+            legal_entity="Projektron GmbH",
+            register_court="Amtsgericht Charlottenburg",
+            register_number="HRB 79669",
+        ),
+    )
+    now = datetime(2026, 11, 25, tzinfo=UTC)
+    url = (
+        "https://www.northdata.de/PROJEKTRON%20GmbH,%20Berlin/"
+        "Amtsgericht%20Charlottenburg%20(Berlin)%20HRB%2079669%20B"
+    )
+    fact = url_record_fact(ctx, url, now)
+    assert fact is not None and fact.topic == "register_record" and fact.quote == ""
+    assert fact.source_url == url
+    # another entity, or the right name with another number: no record
+    assert (
+        url_record_fact(ctx, "https://www.northdata.de/HRB%20GmbH,%20Hannover/HRB%20101453", now)
+        is None
+    )
+    assert url_record_fact(ctx, url.replace("79669", "796690"), now) is None

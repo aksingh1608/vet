@@ -4,6 +4,7 @@ from tests.conftest import FakeLLM, fixture_text
 from vet.collectors import footprint
 from vet.collectors.base import Context, SiteIdentity
 from vet.collectors.footprint import _Classified, _Item
+from vet.llm import unwrap
 from vet.schemas import Axis, Polarity, SourceKind
 from vet.tavily import Tavily
 
@@ -22,13 +23,14 @@ def item(url: str, **kw: object) -> _Item:
         "statement": "s",
         "quote": "",
         "is_hard_flag": False,
+        "topic": "reviews",
     }
     base.update(kw)
     return _Item(**base)
 
 
 def classify(user: str) -> _Classified:
-    sent = json.loads(user.removeprefix("<data>\n").removesuffix("\n</data>"))
+    sent = json.loads(unwrap(user))
     urls = {r["url"] for r in sent["results"]}
     assert "https://ledgerly.example/blog/launch" not in urls  # own domain never classified
     return _Classified(
@@ -52,6 +54,7 @@ def classify(user: str) -> _Classified:
                 polarity=Polarity.NEGATIVE,
                 weight=0.8,
                 is_hard_flag=True,
+                topic="news",
                 statement="heise reports a 2024 data leak at Ledgerly",
                 quote="sind 2024 Kundendaten von 12.000 Firmen abgeflossen",
             ),

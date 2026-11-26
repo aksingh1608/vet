@@ -4,6 +4,7 @@ from tests.conftest import FakeLLM, fixture_text
 from tests.test_age import routes as age_routes
 from tests.test_site_reader import extract_response, site_routes
 from vet.judge import JudgeOut
+from vet.llm import unwrap
 from vet.orchestrator import Deps, normalize_url, run_product
 from vet.output import validate_verdict_file, write_run
 from vet.schemas import RealAlive, Trust
@@ -12,7 +13,7 @@ from vet.verify import _Support, _SupportOut
 
 
 def judge_response(user: str) -> JudgeOut:
-    data = json.loads(user.removeprefix("<data>\n").removesuffix("\n</data>"))
+    data = json.loads(unwrap(user))
     ids = [f["id"] for f in data["facts"]]
     return JudgeOut(
         real_alive=RealAlive.YES,
@@ -20,12 +21,12 @@ def judge_response(user: str) -> JudgeOut:
         confidence=0.7,
         summary="Long-lived domain; the site tries to steer AI evaluators.",
         reason_fact_ids=ids,
-        findings=["The about page contains hidden text addressed to AI evaluators."],
+        finding_fact_ids=[i for i in ids if i.startswith("guard")],
     )
 
 
 def support(user: str) -> _SupportOut:
-    items = json.loads(user.removeprefix("<data>\n").removesuffix("\n</data>"))
+    items = json.loads(unwrap(user))
     return _SupportOut(items=[_Support(id=i["id"], supported=True) for i in items])
 
 
@@ -70,3 +71,31 @@ def test_normalize_url() -> None:
 
 def test_fixture_sanity() -> None:
     assert "HRB 123456" in fixture_text("site/impressum.html")
+
+
+async def test_a_collector_that_times_out_does_not_break_the_run(
+    router_fetcher, monkeypatch
+) -> None:
+    import asyncio
+
+    from vet import orchestrator
+
+    async def stuck(ctx):  # noqa: ANN001
+        await asyncio.sleep(30)
+        return []
+
+    monkeypatch.setitem(orchestrator.AFTER_SITE, "alive", stuck)
+    routes = [("api.tavily.com", 500), *age_routes(), *site_routes()]
+    fetcher, _ = router_fetcher(routes)
+    settings = fetcher.settings.model_copy(update={"collector_timeout_s": 0.2})
+    llm = FakeLLM({_ExtractOut: extract_response, JudgeOut: judge_response, _SupportOut: support})
+    async with fetcher:
+        deps = Deps(
+            settings=settings, fetcher=fetcher, llm=llm, run_id="t", git_sha="x", model="fake"
+        )
+        record, _ = await run_product("ledgerly.example", deps)
+    errors = {c.name: c.error for c in record.collectors}
+    assert errors["alive"].startswith("timed out")
+    assert errors["age"] == "" and errors["looks"] == ""
+    assert {c.name for c in record.collectors} >= {"site_reader", "age", "risk", "alive", "looks"}
+    assert len(record.verdict.reasons) >= 4

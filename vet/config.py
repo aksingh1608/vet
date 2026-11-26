@@ -44,8 +44,34 @@ DEFAULT_HOST_POLICIES: dict[str, HostPolicy] = {
     "api.tavily.com": HostPolicy(min_interval_s=0.25),
 }
 
-# Never fetched directly. North Data pages are found via Tavily and quoted from its snippet.
-SNIPPET_ONLY_DOMAINS: tuple[str, ...] = ("northdata.com", "northdata.de")
+# Never fetched directly. Pages on these domains are found via Tavily and quoted from the Tavily
+# result content (register records, review sites and LinkedIn block or forbid bots).
+SNIPPET_ONLY_DOMAINS: tuple[str, ...] = (
+    "northdata.com",
+    "northdata.de",
+    "g2.com",
+    "capterra.com",
+    "capterra.de",
+    "capterra.co.uk",
+    "trustpilot.com",
+    "omr.com",
+    "softwareadvice.com",
+    "gartner.com",
+    "linkedin.com",
+)
+
+# Record APIs: called without a robots.txt check (still rate-limited, cached and traced).
+API_HOSTS: tuple[str, ...] = (
+    "rdap.org",
+    "crt.sh",
+    "web.archive.org",
+    "api.company-information.service.gov.uk",
+    "haveibeenpwned.com",
+    "api.github.com",
+    "pypi.org",
+    "registry.npmjs.org",
+    "itunes.apple.com",
+)
 
 
 class Settings(BaseModel):

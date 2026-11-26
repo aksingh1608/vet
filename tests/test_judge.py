@@ -86,7 +86,7 @@ async def test_llm_judge_is_clamped_and_cannot_invent_sources() -> None:
             confidence=1.4,
             summary="Looks fine.",
             reason_fact_ids=["made-up-1", "b1", "v1", "a1", "b1"],
-            findings=["f"] * 9,
+            finding_fact_ids=["made-up-2", "a1"],
         )
 
     result = await judge(FakeLLM({JudgeOut: respond}), [], [*SOLID, breach, vendor])
@@ -95,7 +95,9 @@ async def test_llm_judge_is_clamped_and_cannot_invent_sources() -> None:
     assert result.confidence == 1.0
     assert result.ranked_fact_ids[:2] == ["b1", "a1"]
     assert "made-up-1" not in result.ranked_fact_ids and "v1" not in result.ranked_fact_ids
-    assert len(result.findings) == 5
+    # the breach is a finding even though the judge did not pick it; invented ids are dropped
+    assert result.finding_fact_ids[0] == "b1"
+    assert "made-up-2" not in result.finding_fact_ids
     assert any("clamped" in n for n in result.notes)
 
 
@@ -104,3 +106,94 @@ async def test_rules_only_fallback_when_llm_fails() -> None:
     assert not result.used_llm
     assert result.real_alive == RealAlive.YES
     assert result.ranked_fact_ids[0] in {"a1", "t1"}
+
+
+# ---- trust calibration ------------------------------------------------------------------
+
+
+def old_domain(years_ago: int = 30) -> Fact:
+    return fact(
+        "age-0",
+        Axis.REAL_ALIVE,
+        Polarity.POSITIVE,
+        0.5,
+        collector="age",
+        source_kind=SourceKind.RECORD,
+        topic="domain_registered",
+        observed_at=NOW.replace(year=NOW.year - years_ago),
+        source_url="https://lookup.icann.org/en/lookup?name=basecamp.com",
+    )
+
+
+def independent(fid: str, site: str, axis: Axis = Axis.REAL_ALIVE) -> Fact:
+    return fact(fid, axis, Polarity.POSITIVE, 0.3, source_url=f"https://www.{site}/x")
+
+
+US_VENDOR = [old_domain(), independent("fp-0", "g2.com"), independent("fp-1", "nytimes.com")]
+
+
+def test_long_history_and_independent_sources_mean_trust_without_any_register() -> None:
+    # A US vendor: no register record at all, which is missing evidence, never negative.
+    rules = apply_rules(US_VENDOR, today=NOW)
+    assert rules.allowed_trust == [Trust.TRUST]
+    assert rules.scores["history_years"] > 10
+    assert any("trust floor" in n for n in rules.notes)
+
+
+def test_floor_needs_two_distinct_independent_sites() -> None:
+    same_site = [old_domain(), independent("fp-0", "g2.com"), independent("fp-1", "g2.com")]
+    assert apply_rules(same_site, today=NOW).allowed_trust != [Trust.TRUST]
+
+
+def test_floor_needs_more_than_ten_years() -> None:
+    young = [old_domain(years_ago=6), *US_VENDOR[1:]]
+    assert apply_rules(young, today=NOW).allowed_trust != [Trust.TRUST]
+
+
+def test_real_negative_allows_downgrade_below_floor() -> None:
+    lawsuit = fact("risk-10", Axis.TRUST, Polarity.NEGATIVE, 0.4, collector="risk", topic="lawsuit")
+    rules = apply_rules([*US_VENDOR, lawsuit], today=NOW)
+    assert rules.allowed_trust == [Trust.CAUTION, Trust.TRUST]
+
+
+def test_hard_flag_blocks_the_floor() -> None:
+    breach = fact(
+        "risk-0", Axis.TRUST, Polarity.NEGATIVE, 0.8, collector="risk", topic="breach",
+        is_hard_flag=True, source_kind=SourceKind.RECORD,
+    )  # fmt: skip
+    rules = apply_rules([*US_VENDOR, breach], today=NOW)
+    assert Trust.TRUST not in rules.allowed_trust
+
+
+def test_mixed_reviews_are_minor_and_do_not_move_the_verdict() -> None:
+    poor = fact("fp-3", Axis.TRUST, Polarity.NEGATIVE, 0.15, topic="reviews")
+    with_reviews = apply_rules([*US_VENDOR, poor], today=NOW)
+    assert with_reviews.allowed_trust == [Trust.TRUST]  # not a real negative
+    assert with_reviews.scores["trust_neg"] == 0.0  # and not scored
+    assert poor in with_reviews.eligible  # but it may still be cited
+
+
+async def test_judge_cannot_go_below_the_floor() -> None:
+    def respond(user: str) -> JudgeOut:
+        return JudgeOut(
+            real_alive=RealAlive.YES,
+            trust=Trust.CAUTION,
+            confidence=0.6,
+            summary="s",
+            reason_fact_ids=["age-0"],
+            finding_fact_ids=[],
+        )
+
+    result = await judge(FakeLLM({JudgeOut: respond}), [], US_VENDOR)
+    assert result.trust == Trust.TRUST
+
+
+def test_contradictions_rank_first() -> None:
+    from vet.judge import rank_facts
+
+    gap = fact(
+        "claims_check-0", Axis.TRUST, Polarity.NEGATIVE, 0.5, collector="claims_check",
+        topic="founding_year_gap", source_kind=SourceKind.VENDOR,
+    )  # fmt: skip
+    hard = fact("guard-0", Axis.TRUST, Polarity.NEGATIVE, 0.9, is_hard_flag=True)
+    assert [f.id for f in rank_facts([hard, *SOLID, gap])][:2] == ["claims_check-0", "guard-0"]

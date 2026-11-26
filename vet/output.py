@@ -10,11 +10,20 @@ import re
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, Field, ValidationError
 
 from vet.collectors.base import CollectorResult, SiteIdentity
 from vet.config import Settings
-from vet.schemas import MAX_REASONS, MIN_REASONS, Claim, Fact, RealAlive, Trust, Verdict
+from vet.schemas import (
+    MAX_REASONS,
+    MIN_REASONS,
+    Claim,
+    ClaimCheck,
+    Fact,
+    RealAlive,
+    Trust,
+    Verdict,
+)
 from vet.trace import Trace, Usage
 from vet.verify import VerifyResult
 
@@ -29,10 +38,12 @@ class ProductRecord(BaseModel):
     verdict: Verdict
     identity: SiteIdentity
     claims: list[Claim]
+    claim_checks: list[ClaimCheck] = Field(default_factory=list)
     facts: list[Fact]
     collectors: list[CollectorResult]
     verification: list[VerifyResult]
     judge_notes: list[str]
+    selection_notes: list[str] = Field(default_factory=list)
     used_llm_judge: bool
     usage: Usage
     seconds: float
@@ -96,6 +107,9 @@ def validate_verdict_file(path: Path, settings: Settings) -> list[str]:
         for j, reason in enumerate(verdict.reasons):
             if not reason.source_url.startswith(("http://", "https://")):
                 problems.append(f"{where}: reason {j} has no openable link")
+        for j, finding in enumerate(verdict.findings):
+            if not finding.source_url.startswith(("http://", "https://")):
+                problems.append(f"{where}: finding {j} has no openable link")
     return problems
 
 

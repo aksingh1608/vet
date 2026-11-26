@@ -1,0 +1,89 @@
+{% extends "base.html.j2" %}
+{% block title %}vet: {{ v.product_url }}{% endblock %}
+{% block body %}
+<p class="small"><a href="index.html">&larr; all products</a></p>
+<h1>{{ v.product_url }}</h1>
+<p class="muted small">{{ r.identity.legal_entity or r.identity.vendor_name or "vendor not identified" }}
+  &middot; run {{ v.run_id }} &middot; {{ "%.0f"|format(r.seconds) }} s
+  &middot; {{ r.usage.tavily_credits }} Tavily credits</p>
+
+<div class="labels">
+  <span class="pill {{ v.real_alive }}">real &amp; alive: {{ v.real_alive }}</span>
+  <span class="pill {{ v.trust }}">trust: {{ v.trust | replace("_", " ") }}</span>
+  <span class="pill">confidence {{ "%.2f"|format(v.confidence) }}</span>
+</div>
+<p>{{ v.summary }}</p>
+
+<h2>Reasons</h2>
+<div class="card">
+<ol class="reasons">
+{% for reason in v.reasons %}
+  <li>
+    <span class="{{ reason.polarity }}">{{ "+" if reason.polarity == "positive" else ("&minus;"|safe if reason.polarity == "negative" else "&middot;"|safe) }}</span>
+    {{ reason.text }}
+    <span class="muted small">({{ reason.axis | replace("_", " ") }})</span>
+    <br><a class="small" href="{{ reason.source_url | safe_url }}" rel="noopener noreferrer nofollow">{{ reason.source_url }}</a>
+    {% if reason.quote %}<p class="quote">&ldquo;{{ reason.quote }}&rdquo;</p>{% endif %}
+  </li>
+{% endfor %}
+</ol>
+</div>
+
+<h2>Findings</h2>
+{% if v.findings %}
+<div class="card">
+<ul>
+{% for f in v.findings %}
+  <li>{{ f.text }}<br><a class="small" href="{{ f.source_url | safe_url }}" rel="noopener noreferrer nofollow">{{ f.source_url }}</a></li>
+{% endfor %}
+</ul>
+</div>
+{% else %}
+<p class="muted">No verified contradictions or red flags.</p>
+{% endif %}
+
+<h2>Claims checked</h2>
+{% if r.claim_checks %}
+<table>
+  <tr><th>Claim</th><th>Status</th><th>Note</th></tr>
+  {% set claims = {} %}
+  {% for c in r.claims %}{% set _ = claims.update({c.id: c}) %}{% endfor %}
+  {% for c in r.claim_checks %}
+  <tr>
+    <td>{{ claims[c.claim_id].text if c.claim_id in claims else c.claim_id }}</td>
+    <td class="{{ 'flag' if c.status == 'contradicted' else '' }}">{{ c.status }}</td>
+    <td class="muted small">{{ c.note }}</td>
+  </tr>
+  {% endfor %}
+</table>
+{% else %}
+<p class="muted">No claims extracted.</p>
+{% endif %}
+
+<h2>Collectors</h2>
+<table>
+  <tr><th>Collector</th><th class="num">Facts</th><th class="num">Seconds</th><th>Error</th></tr>
+  {% for c in r.collectors %}
+  <tr><td>{{ c.name }}</td><td class="num">{{ c.facts | length }}</td>
+      <td class="num">{{ "%.1f"|format(c.seconds) }}</td>
+      <td class="muted small">{{ c.error }}</td></tr>
+  {% endfor %}
+</table>
+
+<h2>All facts</h2>
+<details>
+<summary>{{ r.facts | length }} facts, {{ checks | length }} verified or checked</summary>
+<table>
+  <tr><th>Id</th><th>Statement</th><th>Weight</th><th>Check</th></tr>
+  {% for f in r.facts %}
+  <tr>
+    <td class="small">{{ f.id }}{% if f.is_hard_flag %} <span class="flag">hard flag</span>{% endif %}</td>
+    <td><span class="{{ f.polarity }}">{{ f.polarity }}</span> {{ f.statement }}
+        <br><a class="small" href="{{ f.source_url | safe_url }}" rel="noopener noreferrer nofollow">{{ f.source_url }}</a></td>
+    <td class="num">{{ "%.2f"|format(f.weight) }}</td>
+    <td class="small muted">{% if f.id in checks %}{{ "passed" if checks[f.id].passed else "failed" }}: {{ checks[f.id].note }}{% else %}not checked{% endif %}</td>
+  </tr>
+  {% endfor %}
+</table>
+</details>
+{% endblock %}

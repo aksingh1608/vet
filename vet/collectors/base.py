@@ -20,6 +20,19 @@ from vet.tavily import Tavily
 logger = logging.getLogger(__name__)
 
 
+class SitePage(BaseModel):
+    """One page of the vendor's own site, as fetched by the site reader."""
+
+    kind: str
+    url: str
+    final_url: str = ""
+    status: int = 0
+    text: str = ""  # main text after the guard removed hidden text and AI-addressed text
+    raw: str = ""  # raw HTML (kept for quote checks, never sent to the LLM)
+    error: str = ""
+    guessed: bool = False  # a fallback path we tried, not a link the site shows
+
+
 class SiteIdentity(BaseModel):
     vendor_name: str = ""
     product_name: str = ""
@@ -40,6 +53,7 @@ class Context:
     claims: list[Claim] = field(default_factory=list)
     identity: SiteIdentity = field(default_factory=SiteIdentity)
     homepage_text: str = ""
+    pages: list[SitePage] = field(default_factory=list)
 
     def now(self) -> datetime:
         return datetime.now(UTC)

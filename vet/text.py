@@ -48,7 +48,12 @@ def contains_quote(haystack: str, quote: str) -> bool:
         return False
     if q in normalize(haystack):
         return True
-    return q in normalize(html_to_text(haystack))
+    text = normalize(html_to_text(haystack))
+    if q in text:
+        return True
+    # Extraction may join or split words at tag boundaries ("2021</b>founded"): compare
+    # without whitespace. Still character-exact for everything else.
+    return _WS.sub("", q) in _WS.sub("", text)
 
 
 def registered_domain(url_or_host: str) -> str:

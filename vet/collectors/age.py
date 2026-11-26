@@ -1,5 +1,9 @@
 """Age: when did this domain appear? RDAP registration, first logged certificate (crt.sh,
-optional) and Wayback Machine history. No LLM. Needs only the domain, so it starts at once."""
+optional) and Wayback Machine history. No LLM. Needs only the domain, so it starts at once.
+
+Each fact links a page a human can open (ICANN lookup, crt.sh search, Wayback calendar or
+snapshot) and carries the machine record it is verified against in ``check_url``.
+"""
 
 import asyncio
 import json
@@ -14,7 +18,10 @@ logger = logging.getLogger(__name__)
 
 NAME = "age"
 RDAP_URL = "https://rdap.org/domain/{domain}"
+RDAP_HUMAN_URL = "https://lookup.icann.org/en/lookup?name={domain}"
 CRTSH_URL = "https://crt.sh/?q={domain}&output=json"
+CRTSH_HUMAN_URL = "https://crt.sh/?q={domain}"
+WAYBACK_HISTORY_URL = "https://web.archive.org/web/*/{domain}"
 CDX_FIRST_URL = (
     "https://web.archive.org/cdx/search/cdx?url={domain}&output=json&fl=timestamp&limit=1"
 )
@@ -74,10 +81,13 @@ async def rdap_facts(ctx: Context, today: datetime) -> list[Fact]:
             axis=Axis.REAL_ALIVE,
             polarity=polarity,
             weight=weight,
-            source_url=url,
+            source_url=RDAP_HUMAN_URL.format(domain=ctx.domain),
+            check_url=url,
             quote=raw,
             source_kind=SourceKind.RECORD,
             fetched_at=today,
+            topic="domain_registered",
+            observed_at=created,
         )
     ]
 
@@ -111,10 +121,13 @@ async def crtsh_facts(ctx: Context, today: datetime) -> list[Fact]:
             axis=Axis.REAL_ALIVE,
             polarity=polarity,
             weight=weight,
-            source_url=url,
+            source_url=CRTSH_HUMAN_URL.format(domain=ctx.domain),
+            check_url=url,
             quote=raw,
             source_kind=SourceKind.RECORD,
             fetched_at=today,
+            topic="first_certificate",
+            observed_at=first,
         )
     ]
 
@@ -132,10 +145,12 @@ async def wayback_facts(ctx: Context, today: datetime) -> list[Fact]:
                 axis=Axis.REAL_ALIVE,
                 polarity=Polarity.NEGATIVE,
                 weight=0.4,
-                source_url=first_url,
+                source_url=WAYBACK_HISTORY_URL.format(domain=ctx.domain),
+                check_url=first_url,
                 quote="",
                 source_kind=SourceKind.RECORD,
                 fetched_at=today,
+                topic="no_captures",
             )
         ]
     ts = captures[0]
@@ -154,6 +169,8 @@ async def wayback_facts(ctx: Context, today: datetime) -> list[Fact]:
             quote="",
             source_kind=SourceKind.RECORD,
             fetched_at=today,
+            topic="first_capture",
+            observed_at=first,
         )
     ]
 
@@ -182,10 +199,13 @@ async def wayback_facts(ctx: Context, today: datetime) -> list[Fact]:
                 axis=Axis.REAL_ALIVE,
                 polarity=polarity,
                 weight=weight,
-                source_url=years_url,
+                source_url=WAYBACK_HISTORY_URL.format(domain=ctx.domain),
+                check_url=years_url,
                 quote="",
                 source_kind=SourceKind.RECORD,
                 fetched_at=today,
+                topic="capture_history",
+                observed_at=datetime(years[0], 1, 1, tzinfo=UTC),
             )
         )
     return facts
