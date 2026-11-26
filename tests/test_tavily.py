@@ -55,3 +55,18 @@ async def test_snippets_kept_for_verifier(router_fetcher) -> None:
         tavily = Tavily(fetcher.settings, fetcher)
         results = await tavily.search("x")
     assert tavily.snippets[results[0].url].startswith("Ledgerly Software GmbH")
+
+
+async def test_search_tool_pages_are_dropped_from_results(router_fetcher) -> None:
+    body = {
+        "results": [
+            {"url": "https://tavily.com/knowledge/company/abc123", "content": "Acme is a tool"},
+            {"url": "https://www.g2.com/products/acme/reviews", "content": "Acme reviews"},
+        ]
+    }
+    fetcher, _ = router_fetcher([("api.tavily.com", json.dumps(body))])
+    async with fetcher:
+        tavily = Tavily(fetcher.settings, fetcher)
+        results = await tavily.search("acme")
+    assert [r.url for r in results] == ["https://www.g2.com/products/acme/reviews"]
+    assert "https://tavily.com/knowledge/company/abc123" not in tavily.snippets

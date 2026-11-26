@@ -8,9 +8,12 @@ Founding year (AGENTS.md decision 2):
   ``unconfirmed`` plus a NEGATIVE medium-weight fact. Domain records cannot contradict a
   founding year: many companies are older than their website.
 
+A claim is ``confirmed`` only when one record states the same specific fact as the claim: every
+number, year, name and identifier in the claim's text must appear in that record (a general
+description of the product confirms nothing). Founding year: the register shows the same year.
 Register number / legal name: ``contradicted`` when legal_id found a mismatch, ``confirmed`` when
-it found the register record. Customers: ``confirmed`` only by an independent mention.
-Everything else stays ``unconfirmed``.
+a register record states the claim's name and number. Customers: an independent mention that
+names the customer (and states the claim's numbers). Everything else stays ``unconfirmed``.
 
 Facts made here quote the vendor page that makes the claim; the record facts they rest on are
 listed in ``related_fact_ids`` and must verify too before the fact can become a reason.
@@ -20,6 +23,7 @@ import re
 from datetime import datetime
 
 from vet.schemas import Axis, Claim, ClaimCheck, Fact, Polarity, SourceKind
+from vet.sources import is_search_tool_url
 
 NAME = "claims_check"
 FOUNDING_GAP_YEARS = 3
@@ -34,6 +38,31 @@ FOUNDING_GAP_WEIGHT = 0.5
 CONTRADICTION_WEIGHT = 0.7
 _YEAR = re.compile(r"\b(1[89]\d{2}|20\d{2})\b")
 _NAME_TOKEN = re.compile(r"\b[A-Z][\w&.-]{2,}")
+_NUMBER = re.compile(r"\d+")
+_THOUSANDS = re.compile(r"(?<=\d)[,.\u00a0 ](?=\d{3}\b)")
+# Capitalised words that carry no specific fact (sentence starts, claim boilerplate).
+_PLAIN_WORDS = frozenset(
+    {"vendor", "vendors", "the", "our", "over", "more", "than", "since", "trusted", "used", "with"}
+)
+
+
+def _normal(text: str) -> str:
+    return _THOUSANDS.sub("", text).lower()
+
+
+def specifics(text: str, ignore: frozenset[str] | set[str] = frozenset()) -> set[str]:
+    """The numbers, years, names and identifiers a claim states, lower-cased."""
+    names = {t.strip(".").lower() for t in _NAME_TOKEN.findall(text)}
+    names = {n for n in names if n and n not in _PLAIN_WORDS and n not in ignore}
+    return names | set(_NUMBER.findall(_normal(text)))
+
+
+def states_all(fact: Fact, wanted: set[str]) -> bool:
+    """True when the fact's own words contain every specific item (whole words or numbers)."""
+    text = _normal(f"{fact.statement} {fact.quote}")
+    return bool(wanted) and all(
+        re.search(rf"(?<![\w]){re.escape(w)}(?![\w])", text) for w in wanted
+    )
 
 
 def claimed_year(claim: Claim) -> int | None:
@@ -81,10 +110,11 @@ def check_founding(
         reg = min(registers, key=_when)
         reg_year = _when(reg).year
         if abs(year - reg_year) <= REGISTER_TOLERANCE_YEARS:
+            # Only the same year confirms; a near miss is not contradicted either.
             return (
                 ClaimCheck(
                     claim_id=claim.id,
-                    status="confirmed",
+                    status="confirmed" if year == reg_year else "unconfirmed",
                     fact_ids=[reg.id],
                     note=f"register shows {reg_year}",
                 ),
@@ -145,7 +175,14 @@ def check_register(claim: Claim, facts: list[Fact]) -> ClaimCheck:
             fact_ids=[f.id for f in bad],
             note=bad[0].statement,
         )
-    good = [f for f in legal if f.topic == "register_record" and f.polarity == Polarity.POSITIVE]
+    wanted = specifics(claim.text)
+    good = [
+        f
+        for f in legal
+        if f.topic == "register_record"
+        and f.polarity == Polarity.POSITIVE
+        and states_all(f, wanted)
+    ]
     if good:
         return ClaimCheck(
             claim_id=claim.id,
@@ -154,32 +191,36 @@ def check_register(claim: Claim, facts: list[Fact]) -> ClaimCheck:
             note="register record",
         )
     return ClaimCheck(
-        claim_id=claim.id, status="unconfirmed", fact_ids=[], note="no register record"
+        claim_id=claim.id,
+        status="unconfirmed",
+        fact_ids=[],
+        note="no register record states this name or number",
     )
 
 
 def check_customer(claim: Claim, facts: list[Fact], vendor_names: set[str]) -> ClaimCheck:
-    names = {
-        t.strip(".").lower()
-        for t in _NAME_TOKEN.findall(claim.text + " " + claim.quote)
-        if t.lower() not in vendor_names and t.lower() not in {"vendor", "the", "our"}
-    }
+    vendor_words = {w for n in vendor_names for w in re.findall(r"[\w&-]+", n.lower())}
+    wanted = specifics(claim.text, vendor_words)
     support = [
         f
         for f in facts
         if f.source_kind == SourceKind.INDEPENDENT
         and f.polarity != Polarity.NEGATIVE
-        and any(n and n in f"{f.statement} {f.quote}".lower() for n in names)
+        and not is_search_tool_url(f.source_url)
+        and states_all(f, wanted)
     ]
     if support:
         return ClaimCheck(
             claim_id=claim.id,
             status="confirmed",
             fact_ids=[f.id for f in support],
-            note="mentioned by an independent source",
+            note="an independent source states the same names and numbers",
         )
     return ClaimCheck(
-        claim_id=claim.id, status="unconfirmed", fact_ids=[], note="no independent mention found"
+        claim_id=claim.id,
+        status="unconfirmed",
+        fact_ids=[],
+        note="no independent source states these names and numbers",
     )
 
 

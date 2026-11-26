@@ -288,3 +288,17 @@ async def test_a_stored_403_gives_the_same_result_on_the_next_run(router_fetcher
         second = await check_source(f, fetcher, snippets, fetcher.settings)
     assert first == second and second.snippet_sourced
     assert sum(1 for r in rec.requests if r.url.path == "/403") == page_hits  # not refetched
+
+
+async def test_search_tool_pages_never_verify_and_are_not_fetched(router_fetcher) -> None:
+    from vet.verify import check_source
+
+    quote = "Acme is a free-to-use online design tool"
+    url = "https://tavily.com/knowledge/company/wafeqPWRLzYp"
+    fetcher, rec = router_fetcher([("tavily.com", f"<p>{quote}</p>")])
+    async with fetcher:
+        result = await check_source(
+            fact("footprint-1", url, quote), fetcher, {url: quote}, fetcher.settings
+        )
+    assert not result.passed and result.note == "search-tool page, not a source"
+    assert rec.requests == []

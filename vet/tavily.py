@@ -14,6 +14,7 @@ from pydantic import BaseModel
 from vet import trace
 from vet.config import Settings
 from vet.fetch import Fetcher, FetchStatusError
+from vet.sources import is_search_tool_url
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +82,12 @@ class Tavily:
 
         data = json.loads(result.text)
         results = [TavilyResult.model_validate(r) for r in data.get("results", [])]
+        # Tavily's own pages (generated company profiles) are not sources and have no page
+        # behind them to link to: drop them before any collector sees them.
+        dropped = [r.url for r in results if is_search_tool_url(r.url)]
+        if dropped:
+            logger.debug("dropped %d search-tool result(s): %s", len(dropped), dropped)
+            results = [r for r in results if not is_search_tool_url(r.url)]
         for r in results:  # every returned URL, so computed facts can show Tavily found it
             self.snippets.setdefault(r.url, "")
             if r.content:

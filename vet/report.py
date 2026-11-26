@@ -20,6 +20,7 @@ from jinja2 import Environment, PackageLoader, select_autoescape
 
 from vet.output import ProductRecord, find_verdict_file, load_records, product_slug
 from vet.schemas import Axis, Fact, Polarity
+from vet.sources import is_search_tool_url
 from vet.text import registered_domain
 
 logger = logging.getLogger(__name__)
@@ -86,7 +87,11 @@ def claim_rows(record: ProductRecord, facts: dict[str, Fact]) -> list[dict]:
     rows = []
     for check in record.claim_checks:
         claim = claims.get(check.claim_id)
-        records = [facts[i] for i in check.fact_ids if i in facts][:MAX_CLAIM_RECORDS]
+        records = [
+            facts[i]
+            for i in check.fact_ids
+            if i in facts and not is_search_tool_url(facts[i].source_url)
+        ][:MAX_CLAIM_RECORDS]
         rows.append({"claim": claim, "check": check, "records": records})
     order = {"contradicted": 0, "confirmed": 1, "unconfirmed": 2}
     return sorted(rows, key=lambda r: order[r["check"].status])

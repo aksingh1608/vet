@@ -3,7 +3,7 @@
 Sources: the repo, the tests, `runs/`, `findings.md` and the commit history. Nothing else.
 
 ## Numbers
-- **Tests:** 272, all passing (`uv run pytest`). Unit tests use no network.
+- **Tests:** 279, all passing (`uv run pytest`). Unit tests use no network.
 - **6 collectors:**
   - `age`: when the domain appeared (RDAP registration, first certificate on crt.sh, Wayback history). No LLM.
   - `legal_id`: whether the legal entity named on the site is in a company register (Companies House for UK; North Data via search snippets for everyone else).
@@ -99,3 +99,14 @@ Sources: the repo, the tests, `runs/`, `findings.md` and the commit history. Not
 - **A customer's founding year was taken as the vendor's:** Cedric's "founded 2021" came from a blog post about a customer. Founding years from blog, customer, changelog and docs pages are ignored.
 - **One refusal lost all classifications:** for Personio, one security report made the model refuse mid-answer and all 16 results were lost. Results are now classified in chunks of 6.
 - **A North Data register record was lost** for Projektron: the entity name and HRB number are in the result URL, not the snippet. They are now matched in code.
+
+## Evidence-honesty fixes (from reviewing the report screenshots)
+- **"Confirmed" used to mean "any independent page mentions the product name."**
+  - Projektron's "over 850 customers" was marked confirmed by profiles that only describe BCS.
+  - A claim is now confirmed only when one record states the same number, name, year or identifier.
+  - Re-checked offline, Projektron's "850 customers" and "300 references" are unconfirmed: no record states either number.
+- **Tavily's own company-profile pages were used as evidence.**
+  - Across the saved runs, 29 reasons and 51 claims-table records linked to tavily.com.
+  - The fixed code drops these results in the Tavily client.
+  - The verifier rejects any fact from a search-tool page.
+  - The report's claims table hides them.

@@ -180,3 +180,19 @@ def test_no_red_flags_section_without_red_flags(tmp_path, settings) -> None:
     write_run(run, [record()], [Trace(product_url="https://acme.example/")], settings)
     render(run, tmp_path / "site", labelled_dir=tmp_path / "none")
     assert "Red flags" not in (tmp_path / "site" / "acme.example.html").read_text("utf-8")
+
+
+def test_claims_table_never_links_to_a_search_tool_page() -> None:
+    from vet.report import claim_rows
+
+    rec = evidence_record()
+    tool = rec.facts[0].model_copy(
+        update={"id": "footprint-9", "source_url": "https://tavily.com/knowledge/company/x"}
+    )
+    rec.facts.append(tool)
+    rec.claim_checks[0] = rec.claim_checks[0].model_copy(
+        update={"fact_ids": ["footprint-9", *rec.claim_checks[0].fact_ids]}
+    )
+    rows = claim_rows(rec, {f.id: f for f in rec.facts})
+    urls = [f.source_url for row in rows for f in row["records"]]
+    assert urls and not any("tavily.com" in u for u in urls)

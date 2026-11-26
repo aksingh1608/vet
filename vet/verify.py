@@ -63,7 +63,13 @@ from vet.schemas import (
     Reason,
     SourceKind,
 )
-from vet.sources import MIN_REAL_REVIEWS, REPUTABLE_TYPES, REVIEW_SITE_NAMES, review_count
+from vet.sources import (
+    MIN_REAL_REVIEWS,
+    REPUTABLE_TYPES,
+    REVIEW_SITE_NAMES,
+    is_search_tool_url,
+    review_count,
+)
 from vet.text import contains_quote, registered_domain
 
 logger = logging.getLogger(__name__)
@@ -150,6 +156,8 @@ def snippet_check(fact: Fact, snippets: dict[str, str], status: int) -> VerifyRe
 async def check_source(
     fact: Fact, fetcher: Fetcher, snippets: dict[str, str], settings: Settings
 ) -> VerifyResult:
+    if is_search_tool_url(fact.source_url):
+        return VerifyResult(fact_id=fact.id, source_ok=False, note="search-tool page, not a source")
     host = host_of(fact.source_url)
     if not fact.check_url and host_matches(host, settings.blocked_domains):
         if not fact.quote:  # computed from the result URL: Tavily must have returned it

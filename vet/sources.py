@@ -20,6 +20,16 @@ RECORD_DOMAINS = frozenset(
         "service.gov.uk",  # Companies House (find-and-update.company-information.service.gov.uk)
     }
 )
+# Search tools and search APIs. Their own pages (e.g. Tavily's generated company profiles) are not
+# sources: no reason, finding or claim record may link to them.
+SEARCH_TOOL_DOMAINS = frozenset({"tavily.com", "serpapi.com", "serper.dev"})
+
+
+def is_search_tool_url(url: str) -> bool:
+    host = re.sub(r"^[a-z]+://", "", url.lower()).split("/", 1)[0].split(":", 1)[0]
+    return bool(host) and registered_domain(host) in SEARCH_TOOL_DOMAINS
+
+
 # Publishers that always need a second, independent source.
 SOCIAL_DOMAINS = frozenset(
     {
