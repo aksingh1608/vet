@@ -1,0 +1,70 @@
+# Our own hand-labelled products for `vet eval` (never the organiser's products).
+#
+# Fill in real_alive (yes | unclear | no) and trust (trust | caution | do_not_trust) from your
+# own research, not from vet's output. Leave a label empty to skip that axis; entries with
+# no labels at all are not run. `reasons` is optional: one short line per reason, with the
+# link you checked.
+#
+# Rows with url: "" are slots to fill: pick a product that fits the category.
+
+products:
+  - url: https://www.projektron.de
+    category: old solid German vendor
+    real_alive:
+    trust:
+    note: Berlin project-management vendor; register record on North Data
+  - url: https://www.lexware.de
+    category: old solid German vendor
+    real_alive:
+    trust:
+    note: long-standing German accounting software
+  - url: https://meet-cedric.com
+    category: brand-new AI SaaS
+    real_alive:
+    trust:
+    note: launched on Product Hunt 2026-11-02; domain registered 2026-07
+  - url: ""
+    category: brand-new AI SaaS
+    real_alive:
+    trust:
+    note: "TODO: pick a second AI SaaS launched in the last few months"
+  - url: https://www.canva.com
+    category: past breach (old)
+    real_alive:
+    trust:
+    note: 2019 breach listed on Have I Been Pwned
+  - url: https://www.dropbox.com
+    category: past breach (recent)
+    real_alive:
+    trust:
+    note: check whether the 2024 Dropbox Sign incident is a recent breach under our rules
+  - url: https://getpocket.com
+    category: frozen or discontinued after acquisition
+    real_alive:
+    trust:
+    note: acquired by Mozilla in 2017, shut down in 2025
+  - url: ""
+    category: frozen or discontinued after acquisition
+    real_alive:
+    trust:
+    note: "TODO: pick a product frozen (not shut down) after an acquisition"
+  - url: https://smollaunch.com
+    category: real but tiny startup
+    real_alive:
+    trust:
+    note: domain from Nov 2025; small launch directory
+  - url: ""
+    category: real but tiny startup
+    real_alive:
+    trust:
+    note: "TODO: pick a second tiny but real startup"
+  - url: https://basecamp.com
+    category: long-standing international SaaS (control)
+    real_alive:
+    trust:
+    note: US vendor, no queryable register; tests the trust floor
+  - url: ""
+    category: polished fake-looking site
+    real_alive:
+    trust:
+    note: "TODO: pick a polished site that looks generated; label from your own research"

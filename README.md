@@ -24,12 +24,18 @@ cp .env.example .env    # then fill in the API keys
 
 ```bash
 uv run vet --help
-uv run vet run https://example.com            # Phase 2
-uv run vet run --file urls.txt                # Phase 3, up to 5 in parallel
-uv run vet validate runs/<id>/verdicts.json   # Phase 2
-uv run vet report runs/<id>                   # Phase 3, static HTML into site/
-uv run vet eval                               # Phase 4
+uv run vet run https://example.com                  # verdict file + report in runs/<id>/
+uv run vet run --file urls.txt --advanced           # up to 5 in parallel, Tavily advanced
+uv run vet run https://x.example --into runs/<id>   # rerun one product inside a run
+uv run vet run --file urls.txt --format csv         # JSON (default) or CSV verdict file
+uv run vet validate runs/<id>                       # check the verdict file (JSON or CSV)
+uv run vet report runs/<id>                         # static HTML into site/ (--public guard)
+uv run vet eval                                     # labelled sets -> runs/<id>/eval.md
 ```
+
+Live round: see [RUNBOOK.md](RUNBOOK.md). Labels for `vet eval` come from `data/labelled/`
+(organiser's examples, CSV/JSON, column names set with `VET_LABEL_COLUMNS`) and
+`eval/extra_set.yaml` (ours).
 
 ## Development
 

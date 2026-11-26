@@ -1,0 +1,4 @@
+{"items": [
+  {"site": {"url": "https://ledgerly.example"}, "labels": {"alive": "REAL", "trust": "caution"}},
+  {"site": {"url": "https://fakeco.example"}, "labels": {"alive": "fake", "trust": "low"}}
+]}

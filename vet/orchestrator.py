@@ -20,7 +20,7 @@ from vet.collectors import age, alive, footprint, legal_id, looks, risk
 from vet.collectors.base import Collector, CollectorResult, Context, run_collector
 from vet.config import Settings
 from vet.fetch import Fetcher
-from vet.judge import judge
+from vet.judge import judge, relabel_after_verification
 from vet.llm import LLM, StructuredLLM
 from vet.output import ProductRecord
 from vet.schemas import Verdict
@@ -152,7 +152,7 @@ async def run_product(url: str, deps: Deps) -> tuple[ProductRecord, trace.Trace]
             "facts": [f.id for f in check_facts],
         }
     )
-    judgement = await judge(deps.llm, ctx.claims, facts, claim_checks)
+    judgement = await judge(deps.llm, ctx.claims, facts, claim_checks, settings.breach_recent_years)
     by_id = {f.id: f for f in facts}
     ranked = [by_id[i] for i in judgement.ranked_fact_ids if i in by_id]
     snippets = tavily.snippets if tavily else {}
@@ -165,8 +165,11 @@ async def run_product(url: str, deps: Deps) -> tuple[ProductRecord, trace.Trace]
         snippets,
         settings,
         ctx.domain,
+        frozenset(judgement.finding_only_ids),
     )
     reasons = selection.reasons
+    failed = {c.fact_id for c in checks if not c.passed}
+    judgement = relabel_after_verification(judgement, facts, failed, settings.breach_recent_years)
 
     verdict = Verdict(
         product_url=url,

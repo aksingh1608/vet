@@ -3,6 +3,7 @@
 import json
 import os
 from pathlib import Path
+from typing import Literal
 
 from dotenv import load_dotenv
 from pydantic import BaseModel, ConfigDict, Field, SecretStr
@@ -20,6 +21,9 @@ DEFAULT_HOST_INTERVAL_S = 1.0
 DEFAULT_MAX_RETRIES = 2
 DEFAULT_BACKOFF_BASE_S = 1.0
 DEFAULT_MAX_PARALLEL_PRODUCTS = 5
+DEFAULT_BREACH_RECENT_YEARS = 3
+OutputFormat = Literal["json", "csv"]
+OUTPUT_FORMATS: tuple[str, ...] = ("json", "csv")
 
 TAVILY_CREDITS_BASIC = 1
 TAVILY_CREDITS_ADVANCED = 2
@@ -100,6 +104,21 @@ class Settings(BaseModel):
     blocked_domains: tuple[str, ...] = SNIPPET_ONLY_DOMAINS
 
     tavily_advanced: bool = False
+    # A breach younger than this (or never disclosed by the vendor) makes trust "caution".
+    breach_recent_years: int = DEFAULT_BREACH_RECENT_YEARS
+
+    # Verdict file format for the organiser ("json" or "csv").
+    output_format: OutputFormat = "json"
+    # Labelled-set loader: our field name -> column/key name in the organiser's file.
+    label_columns: dict[str, str] = Field(
+        default_factory=lambda: {
+            "url": "url",
+            "real_alive": "real_alive",
+            "trust": "trust",
+            "reasons": "reasons",
+            "note": "note",
+        }
+    )
 
     contact: str = ""
     cache_path: Path = Path(".cache") / "fetch.sqlite"
@@ -142,10 +161,12 @@ class Settings(BaseModel):
             ("cache_path", "VET_CACHE_PATH"),
             ("runs_dir", "VET_RUNS_DIR"),
             ("tavily_advanced", "VET_TAVILY_ADVANCED"),
+            ("breach_recent_years", "VET_BREACH_RECENT_YEARS"),
+            ("output_format", "VET_OUTPUT_FORMAT"),
         ):
             raw = os.environ.get(var, "").strip()
             if raw:
-                values[field] = raw
+                values[field] = raw.lower() if field == "output_format" else raw
 
         host_overrides = _json_env("VET_HOST_POLICIES")
         if host_overrides:
@@ -153,8 +174,14 @@ class Settings(BaseModel):
         for field, var in (
             ("real_alive_labels", "VET_REAL_ALIVE_LABELS"),
             ("trust_labels", "VET_TRUST_LABELS"),
+            ("label_columns", "VET_LABEL_COLUMNS"),
         ):
             labels = _json_env(var)
+            if labels and field == "label_columns":  # partial override keeps the defaults
+                labels = {
+                    **Settings.model_fields[field].get_default(call_default_factory=True),
+                    **labels,
+                }
             if labels:
                 values[field] = labels
 

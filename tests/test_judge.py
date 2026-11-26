@@ -197,3 +197,110 @@ def test_contradictions_rank_first() -> None:
     )  # fmt: skip
     hard = fact("guard-0", Axis.TRUST, Polarity.NEGATIVE, 0.9, is_hard_flag=True)
     assert [f.id for f in rank_facts([hard, *SOLID, gap])][:2] == ["claims_check-0", "guard-0"]
+
+
+# ---- breach weighting --------------------------------------------------------------------
+
+
+def breach(year: int, fid: str = "risk-0", **kw: object) -> Fact:
+    return fact(
+        fid,
+        Axis.TRUST,
+        Polarity.NEGATIVE,
+        0.8,
+        collector="risk",
+        topic="breach",
+        is_hard_flag=True,
+        source_kind=SourceKind.RECORD,
+        observed_at=NOW.replace(year=year),
+        source_url="https://haveibeenpwned.com/PwnedWebsites#X",
+        **kw,
+    )
+
+
+def notice(year: int) -> Fact:
+    return fact(
+        "risk-10",
+        Axis.TRUST,
+        Polarity.NEGATIVE,
+        0.6,
+        collector="risk",
+        topic="breach",
+        tags=["disclosed"],
+        source_type="press",
+        observed_at=NOW.replace(year=year),
+        source_url="https://techcrunch.com/x",
+    )
+
+
+def test_recent_breach_makes_trust_caution_even_at_an_old_vendor() -> None:
+    rules = apply_rules([*US_VENDOR, breach(2025, tags=["disclosed"])], today=NOW)
+    assert rules.allowed_trust == [Trust.CAUTION]
+    assert rules.finding_only == set()
+
+
+def test_undisclosed_old_breach_makes_trust_caution() -> None:
+    rules = apply_rules([*US_VENDOR, breach(2019)], today=NOW)
+    assert rules.allowed_trust == [Trust.CAUTION]
+
+
+def test_old_disclosed_breach_keeps_trust_and_becomes_a_finding() -> None:
+    rules = apply_rules([*US_VENDOR, breach(2019), notice(2019)], today=NOW)
+    assert rules.allowed_trust == [Trust.TRUST]
+    assert rules.finding_only == {"risk-0", "risk-10"}
+    assert any("finding, not a downgrade" in n for n in rules.notes)
+
+
+def test_old_disclosed_breach_without_the_floor_is_caution() -> None:
+    young_vendor = [old_domain(years_ago=4), *US_VENDOR[1:]]
+    rules = apply_rules([*young_vendor, breach(2019), notice(2019)], today=NOW)
+    assert rules.allowed_trust == [Trust.CAUTION]
+
+
+def test_breach_age_threshold_is_configurable() -> None:
+    facts = [*US_VENDOR, breach(2019), notice(2019)]
+    assert apply_rules(facts, today=NOW, breach_recent_years=10).allowed_trust == [Trust.CAUTION]
+
+
+async def test_finding_only_breach_is_never_a_reason_but_is_a_finding() -> None:
+    def respond(user: str) -> JudgeOut:
+        return JudgeOut(
+            real_alive=RealAlive.YES,
+            trust=Trust.TRUST,
+            confidence=0.8,
+            summary="s",
+            reason_fact_ids=["risk-0", "age-0"],
+            finding_fact_ids=[],
+        )
+
+    result = await judge(FakeLLM({JudgeOut: respond}), [], [*US_VENDOR, breach(2019), notice(2019)])
+    assert result.trust == Trust.TRUST
+    assert "risk-0" not in result.ranked_fact_ids
+    assert "risk-0" in result.finding_fact_ids and "risk-0" in result.finding_only_ids
+
+
+def test_unverified_negative_is_not_held_against_the_vendor() -> None:
+    from vet.judge import Judgement, relabel_after_verification
+
+    shutdown_rumour = fact(
+        "risk-15", Axis.REAL_ALIVE, Polarity.NEGATIVE, 0.9, collector="risk",
+        topic="discontinued", source_type="press",
+    )  # fmt: skip
+    facts = [*US_VENDOR, shutdown_rumour]
+    assert apply_rules(facts, today=NOW).allowed_trust == [Trust.CAUTION, Trust.TRUST]
+    before = Judgement(
+        real_alive=RealAlive.YES, trust=Trust.CAUTION, confidence=0.7, summary="s",
+        ranked_fact_ids=[], finding_fact_ids=[], used_llm=True, notes=[],
+    )  # fmt: skip
+    after = relabel_after_verification(before, facts, {"risk-15"})
+    assert after.trust == Trust.TRUST  # the floor applies once the failed negative is dropped
+    assert any("after verification" in n for n in after.notes)
+    assert relabel_after_verification(before, facts, set()) is before
+
+
+def test_unverified_breach_notice_still_counts_as_disclosure() -> None:
+    notice_403 = notice(2019)
+    rules = apply_rules(
+        [*US_VENDOR, breach(2019), notice_403], today=NOW, failed=frozenset({"risk-10"})
+    )
+    assert rules.allowed_trust == [Trust.TRUST]

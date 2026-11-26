@@ -24,6 +24,7 @@ def item(url: str, **kw: object) -> _Item:
         "quote": "",
         "is_hard_flag": False,
         "topic": "reviews",
+        "source_type": "review",
     }
     base.update(kw)
     return _Item(**base)
@@ -85,6 +86,9 @@ async def test_footprint_keeps_only_relevant_independent_quoted_results(router_f
         facts = await footprint.collect(make_ctx(fetcher, FakeLLM({_Classified: classify})))
 
     assert [f.source_url for f in facts] == [G2, HEISE]
+    # review counts and ratings become data, written by code; the quote stays as evidence
+    assert facts[0].statement == "G2: 212 reviews, average rating 4.6/5"
+    assert facts[0].code_worded and "212 reviews on G2" in facts[0].quote
     assert all(f.source_kind == SourceKind.INDEPENDENT for f in facts)
     assert facts[0].weight == 1.0
     assert facts[1].is_hard_flag and facts[1].axis == Axis.TRUST

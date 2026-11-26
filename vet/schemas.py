@@ -94,6 +94,13 @@ class Fact(_Model):
     is_filler: bool = False
     # Facts this one is built on (claims_check), all of which must verify too.
     related_fact_ids: list[str] = Field(default_factory=list)
+    # Kind of publisher: record, press, regulator, court, vendor, review, social, forum, blog,
+    # directory, other. Decides whether one source is enough for a finding.
+    source_type: str = ""
+    # The statement was written by our code from the quote or a record (no model check needed).
+    code_worded: bool = False
+    # Extra markers, e.g. "disclosed" on a breach the vendor announced itself.
+    tags: list[str] = Field(default_factory=list)
 
 
 class ClaimCheck(_Model):

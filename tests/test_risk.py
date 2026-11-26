@@ -52,6 +52,8 @@ def item(url: str, event: str, quote: str, **kw: object) -> _Item:
         "independent": True,
         "event": event,
         "date": "2024",
+        "source_type": "other",
+        "vendor_disclosed": False,
         "severity": 0.9,
         "statement": f"{event} reported",
         "quote": quote,
@@ -73,8 +75,18 @@ async def test_single_source_news_is_never_a_hard_flag(router_fetcher) -> None:
         ("https://blog.example/rumour", "Ledgerly is shutting down next month, I heard."),
     )
     items = [
-        item("https://heise.de/a", "breach", "Bei Ledgerly sind Kundendaten abgeflossen"),
-        item("https://blog.example/rumour", "discontinued", "Ledgerly is shutting down"),
+        item(
+            "https://heise.de/a",
+            "breach",
+            "Bei Ledgerly sind Kundendaten abgeflossen",
+            source_type="forum",
+        ),
+        item(
+            "https://blog.example/rumour",
+            "discontinued",
+            "Ledgerly is shutting down",
+            source_type="blog",
+        ),
     ]
     facts = news_facts_from(items, seen, ctx, NOW, 10)
     assert not any(f.is_hard_flag for f in facts)
@@ -134,3 +146,39 @@ async def test_news_queries_in_english_and_german(router_fetcher) -> None:
     assert any("data breach" in q for q in queries)
     assert any("Datenleck" in q and "Insolvenz" in q for q in queries)
     assert len(sent) == 1
+
+
+async def test_one_reputable_press_report_is_enough_and_disclosure_is_tagged(
+    router_fetcher,
+) -> None:
+    fetcher, _ = router_fetcher([])
+    async with fetcher:
+        ctx = make_ctx(fetcher, FakeLLM(), tavily=False)
+    seen = results(
+        ("https://mashable.com/a", "Mozilla is shutting down Pocket on July 8, 2025."),
+        ("https://www.linkedin.com/posts/x", "Ledgerly confirmed a breach in 2023, they said."),
+        ("https://techcrunch.com/b", "Ledgerly notified customers of a 2023 breach."),
+    )
+    items = [
+        item("https://mashable.com/a", "discontinued", "shutting down Pocket", source_type="press"),
+        item(  # a LinkedIn post is social, whatever the classifier says
+            "https://www.linkedin.com/posts/x",
+            "breach",
+            "Ledgerly confirmed a breach in 2023",
+            source_type="press",
+        ),
+        item(
+            "https://techcrunch.com/b",
+            "breach",
+            "Ledgerly notified customers of a 2023 breach",
+            source_type="press",
+            vendor_disclosed=True,
+            date="March 2023",
+        ),
+    ]
+    facts = {f.source_url: f for f in news_facts_from(items, seen, ctx, NOW, 10)}
+    shutdown = facts["https://mashable.com/a"]
+    assert shutdown.is_hard_flag and shutdown.topic == "discontinued"
+    assert facts["https://www.linkedin.com/posts/x"].source_type == "social"
+    notice = facts["https://techcrunch.com/b"]
+    assert notice.tags == ["disclosed"] and notice.observed_at.year == 2023

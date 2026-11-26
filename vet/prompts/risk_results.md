@@ -13,9 +13,21 @@ For each result, return:
   the vendor in passing is not about it.
 - independent: true if a third party wrote it (news site, regulator, court, security
   researcher). False for press releases distributed by the vendor and pages it controls.
-- event: one of "breach", "lawsuit", "fine", "insolvency", "acquisition", "discontinued",
-  "layoffs", or "none" if the result reports no such event about this vendor.
-- date: when the event happened, as written in the result ("" if not stated).
+- event: one of "breach", "security_incident", "lawsuit", "fine", "insolvency", "acquisition",
+  "discontinued", "layoffs", or "none" if the result reports no such event about this vendor.
+  "breach" means the vendor's own systems or the customer data it holds were compromised.
+  "discontinued" means THE product at the vendor's domain is shut down or no longer sold; a
+  different product of the same company (a sister brand, an acquired product) being
+  discontinued is "none". Attacks on users that did not compromise the vendor (credential stuffing with passwords
+  leaked elsewhere, phishing of users, DDoS) are "security_incident".
+- date: when the event happened, as written in the result, or the year the article gives
+  ("" if the result states no date at all).
+- source_type: who published it: "press" (a news outlet with editorial staff), "regulator",
+  "court", "social" (social media post), "forum", "blog" (personal or company blog, Medium,
+  Substack), "vendor", "other".
+- vendor_disclosed: true only if the result says the vendor itself announced, confirmed or
+  notified customers about the breach (a breach notice, a statement, a blog post by the
+  vendor). False for breaches found or leaked by others and not confirmed by the vendor.
 - severity: 0.0 to 1.0. 0.8+ only for a confirmed breach of customer data, a regulator's fine,
   insolvency, or the product being shut down. 0.3-0.6 for lawsuits, smaller incidents, or
   plans not yet carried out. An acquisition alone is not bad news.

@@ -13,11 +13,21 @@ from rich.logging import RichHandler
 from rich.table import Table
 
 from vet import __version__
-from vet.config import Settings
-from vet.output import VERDICTS_FILE, validate_verdict_file, write_run
+from vet.config import OUTPUT_FORMATS, Settings
+from vet.output import (
+    ProductRecord,
+    find_verdict_file,
+    load_records,
+    product_slug,
+    validate_verdict_file,
+    write_run,
+)
 
 GIT_TIMEOUT_S = 5
 SITE_DIR = Path("site")
+REPORT_DIR = "report"  # inside the run directory: private, never published
+EXTRA_SET = Path("eval") / "extra_set.yaml"
+LABELLED_DIR = Path("data") / "labelled"
 
 app = typer.Typer(
     name="vet",
@@ -26,11 +36,6 @@ app = typer.Typer(
     add_completion=False,
 )
 console = Console(stderr=True)
-
-
-def _not_ready(command: str, phase: int) -> None:
-    console.print(f"[yellow]`vet {command}` arrives in Phase {phase}.[/yellow]")
-    raise typer.Exit(code=2)
 
 
 def _git_sha() -> str:
@@ -78,34 +83,29 @@ def main(
         logging.getLogger(noisy).setLevel(logging.DEBUG if verbose else logging.WARNING)
 
 
-@app.command()
-def run(
-    urls: Annotated[list[str] | None, typer.Argument(help="Product URLs to vet.")] = None,
-    file: Annotated[
-        Path | None, typer.Option("--file", "-f", help="File with one URL per line.")
-    ] = None,
-) -> None:
-    """Vet one or more products and write runs/<id>/verdicts.json."""
-    from vet.orchestrator import run_many
-
-    targets = _read_urls(urls, file)
-    if not targets:
-        console.print("[red]Give at least one URL or --file.[/red]")
-        raise typer.Exit(code=2)
+def _settings(advanced: bool, output_format: str | None) -> Settings:
     settings = Settings.from_env()
-    started = time.monotonic()
-    run_id, records, traces = asyncio.run(run_many(targets, settings, _git_sha()))
-    verdicts_path = write_run(settings.runs_dir / run_id, records, traces, settings)
+    updates: dict[str, object] = {}
+    if advanced:
+        updates["tavily_advanced"] = True
+    if output_format:
+        if output_format.lower() not in OUTPUT_FORMATS:
+            console.print(f"[red]--format must be one of {', '.join(OUTPUT_FORMATS)}[/red]")
+            raise typer.Exit(code=2)
+        updates["output_format"] = output_format.lower()
+    return settings.model_copy(update=updates) if updates else settings
 
-    table = Table(title=f"run {run_id}")
+
+def _summary_table(title: str, records: list[ProductRecord]) -> Table:
+    table = Table(title=title)
     for col in (
         "product",
         "real_alive",
         "trust",
         "conf",
         "reasons",
-        "secs",
         "findings",
+        "secs",
         "tavily credits",
         "errors",
     ):
@@ -118,21 +118,77 @@ def run(
             v.trust,
             f"{v.confidence:.2f}",
             str(len(v.reasons)),
-            f"{r.seconds:.0f}",
             str(len(v.findings)),
+            f"{r.seconds:.0f}",
             str(r.usage.tavily_credits),
             str(len(r.errors)),
         )
-    console.print(table)
-    console.print(f"wrote {verdicts_path} in {time.monotonic() - started:.0f}s")
+    return table
+
+
+def _merge(existing: list[ProductRecord], new: list[ProductRecord]) -> list[ProductRecord]:
+    """Replace products already in the run (by slug), keep the rest, append new ones."""
+    fresh = {product_slug(r.verdict.product_url): r for r in new}
+    merged = [fresh.pop(product_slug(r.verdict.product_url), r) for r in existing]
+    return merged + list(fresh.values())
+
+
+@app.command()
+def run(
+    urls: Annotated[list[str] | None, typer.Argument(help="Product URLs to vet.")] = None,
+    file: Annotated[
+        Path | None, typer.Option("--file", "-f", help="File with one URL per line.")
+    ] = None,
+    advanced: Annotated[
+        bool, typer.Option("--advanced", help="Tavily advanced search (2 credits per search).")
+    ] = False,
+    into: Annotated[
+        Path | None,
+        typer.Option("--into", help="Rerun these products inside an existing runs/<id>."),
+    ] = None,
+    output_format: Annotated[
+        str | None, typer.Option("--format", help="Verdict file format: json or csv.")
+    ] = None,
+) -> None:
+    """Vet products: verdict file + HTML report in runs/<id>/, summary table here."""
+    from vet.orchestrator import run_many
+    from vet.report import render
+
+    targets = _read_urls(urls, file)
+    if not targets:
+        console.print("[red]Give at least one URL or --file.[/red]")
+        raise typer.Exit(code=2)
+    if into is not None and not into.is_dir():
+        console.print(f"[red]{into} is not a run directory.[/red]")
+        raise typer.Exit(code=2)
+    settings = _settings(advanced, output_format)
+    started = time.monotonic()
+    run_id, records, traces = asyncio.run(
+        run_many(targets, settings, _git_sha(), run_id=into.name if into else None)
+    )
+    run_dir = into or settings.runs_dir / run_id
+    if into is not None:
+        records = _merge(load_records(into), records)
+    verdicts_path = write_run(run_dir, records, traces, settings)
+    problems = validate_verdict_file(verdicts_path, settings)
+    report = render(run_dir, run_dir / REPORT_DIR)
+
+    console.print(_summary_table(f"run {run_id}", records))
+    console.print(f"verdicts: {verdicts_path}")
+    console.print(f"report:   {report[-1]}")
+    if problems:
+        for problem in problems:
+            console.print(f"[red]✗[/red] {problem}")
+    else:
+        console.print(f"[green]✓[/green] verdict file valid ({time.monotonic() - started:.0f}s)")
 
 
 @app.command()
 def validate(
-    verdicts: Annotated[Path, typer.Argument(help="Path to runs/<id>/verdicts.json.")],
+    verdicts: Annotated[Path, typer.Argument(help="runs/<id> or its verdict file.")],
 ) -> None:
-    """Check a verdicts file against the schema."""
-    path = verdicts / VERDICTS_FILE if verdicts.is_dir() else verdicts
+    """Check a verdict file (JSON or CSV) against the schema and the label mapping."""
+    path = find_verdict_file(verdicts) if verdicts.is_dir() else verdicts
     problems = validate_verdict_file(path, Settings.from_env())
     if problems:
         for problem in problems:
@@ -161,9 +217,43 @@ def report(
 
 @app.command("eval")
 def eval_(
+    labels: Annotated[
+        list[Path] | None,
+        typer.Option("--labels", "-l", help="Label file(s) or folder(s). Default: both sets."),
+    ] = None,
     extra_only: Annotated[
         bool, typer.Option("--extra-only", help="Only run eval/extra_set.yaml.")
     ] = False,
+    advanced: Annotated[bool, typer.Option("--advanced", help="Tavily advanced search.")] = False,
 ) -> None:
-    """Score the pipeline against labelled products and write eval.md."""
-    _not_ready("eval", 4)
+    """Run the labelled products and write runs/<id>/eval.md."""
+    from vet.evaluate import score, write_eval
+    from vet.labels import LabelError, label_files, load_labels
+    from vet.orchestrator import run_many
+
+    settings = _settings(advanced, None)
+    sources = [EXTRA_SET] if extra_only else (labels or [LABELLED_DIR, EXTRA_SET])
+    files = label_files(*sources)
+    try:
+        loaded = [label for f in files for label in load_labels(f, settings)]
+    except LabelError as exc:
+        console.print(f"[red]✗[/red] {exc}")
+        raise typer.Exit(code=1) from exc
+    labelled = [label for label in loaded if label.labelled]
+    if not labelled:
+        console.print(
+            f"[yellow]No labelled products in {', '.join(map(str, files)) or 'any file'} "
+            f"({len(loaded)} placeholders).[/yellow]"
+        )
+        raise typer.Exit(code=2)
+    run_id, records, traces = asyncio.run(
+        run_many([label.url for label in labelled], settings, _git_sha())
+    )
+    run_dir = settings.runs_dir / run_id
+    write_run(run_dir, records, traces, settings)
+    result = score(records, labelled)
+    path = write_eval(run_dir, result, [str(f) for f in files])
+    console.print(_summary_table(f"eval {run_id}", records))
+    for axis in (result.real_alive, result.trust):
+        console.print(f"{axis.axis}: {axis.correct}/{axis.total} ({axis.accuracy:.0%})")
+    console.print(f"wrote {path} ({len(result.misses)} misses)")

@@ -8,6 +8,7 @@ a page cannot inject markup or a javascript: link into the report.
 organiser's examples are never published).
 """
 
+import csv
 import json
 import logging
 import re
@@ -15,7 +16,7 @@ from pathlib import Path
 
 from jinja2 import Environment, PackageLoader, select_autoescape
 
-from vet.output import PRODUCTS_DIR, VERDICTS_FILE, ProductRecord, product_slug
+from vet.output import ProductRecord, find_verdict_file, load_records, product_slug
 from vet.text import registered_domain
 
 logger = logging.getLogger(__name__)
@@ -45,15 +46,16 @@ def _env() -> Environment:
 
 
 def load_run(run_dir: Path) -> list[ProductRecord]:
-    """Product records in the order of verdicts.json."""
+    """Product records in the order of the verdict file."""
     order: list[str] = []
-    verdicts = run_dir / VERDICTS_FILE
+    verdicts = find_verdict_file(run_dir)
     if verdicts.exists():
-        order = [v.get("product_url", "") for v in json.loads(verdicts.read_text(encoding="utf-8"))]
-    records = [
-        ProductRecord.model_validate_json(p.read_text(encoding="utf-8"))
-        for p in sorted((run_dir / PRODUCTS_DIR).glob("*.json"))
-    ]
+        text = verdicts.read_text(encoding="utf-8")
+        if verdicts.suffix == ".csv":
+            order = [r["product_url"] for r in csv.DictReader(text.splitlines())]
+        else:
+            order = [v.get("product_url", "") for v in json.loads(text)]
+    records = load_records(run_dir)
     rank = {url: i for i, url in enumerate(order)}
     return sorted(records, key=lambda r: rank.get(r.verdict.product_url, len(rank)))
 

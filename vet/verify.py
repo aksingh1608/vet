@@ -19,8 +19,11 @@ Selection (``select_reasons``, deterministic):
 * At least one real_alive and one trust reason when a verified fact exists for each.
 * Filler (copyright year, directory listings, site looks) only when nothing better exists.
 
-Findings follow the same rules: verified facts only, each with its link, and no single-source
-rumours (a finding needs a record, the vendor's own page, or two independent sites).
+Findings follow the same rules: verified facts only, each with its link. One source is enough
+for a record, reputable press, a regulator or a court, the vendor's own statement of a negative
+fact, or our own checks (guard, claims_check); everything else (social media, forums, blogs,
+anonymous sources) needs a second independent site on the same topic. Findings never repeat a
+reason: they are for extra discoveries.
 """
 
 import asyncio
@@ -41,9 +44,11 @@ from vet.schemas import (
     Axis,
     Fact,
     Finding,
+    Polarity,
     Reason,
     SourceKind,
 )
+from vet.sources import REPUTABLE_TYPES
 from vet.text import contains_quote, registered_domain
 
 logger = logging.getLogger(__name__)
@@ -60,8 +65,8 @@ AGE_LINK_PRIORITY = ("domain_registered", "first_capture", "capture_history", "f
 # Facts whose claim IS that the page is gone: verified by the 404/410.
 EXPECTS_MISSING_TOPICS = frozenset({"missing_page", "dead_help"})
 MISSING_STATUSES = frozenset({404, 410})
-# Findings that stand on one source: records, the vendor's own pages, our own checks.
-SELF_EVIDENT_COLLECTORS = frozenset({"guard", "claims_check", "site_reader", "alive", "legal_id"})
+# Our own checks: their findings stand on the page or record they quote.
+SELF_EVIDENT_COLLECTORS = frozenset({"guard", "claims_check", "site_reader"})
 
 
 class VerifyResult(BaseModel):
@@ -167,7 +172,7 @@ async def check_source(
 def needs_support_check(fact: Fact) -> bool:
     """Human-written quotes behind a model-written sentence get the model check. Sentences our
     code writes from a record value or a pattern match do not."""
-    if not fact.quote or fact.collector in CODE_WORDED_COLLECTORS:
+    if not fact.quote or fact.code_worded or fact.collector in CODE_WORDED_COLLECTORS:
         return False
     is_api_record = fact.source_kind == SourceKind.RECORD and host_matches(
         host_of(_target(fact)), API_HOSTS
@@ -237,7 +242,9 @@ def fall_back_to_quotes(
             and fact.collector in QUOTE_FALLBACK_COLLECTORS
             and not fact.is_hard_flag  # a hard flag must stand on its own sentence
         ):
-            rewritten[fid] = fact.model_copy(update={"statement": quoted_statement(fact)})
+            rewritten[fid] = fact.model_copy(
+                update={"statement": quoted_statement(fact), "code_worded": True}
+            )
             result.supported = None
             result.note += "; sentence replaced by the verbatim quote"
     return rewritten
@@ -315,11 +322,15 @@ class _Pick:
 
 
 def select_reasons(
-    ranked: list[Fact], passed: set[str], domain: str = ""
+    ranked: list[Fact],
+    passed: set[str],
+    domain: str = "",
+    finding_only: frozenset[str] = frozenset(),
 ) -> tuple[list[Reason], list[str]]:
-    """Pick 4-7 reasons from verified facts in rank order. Pure and deterministic."""
+    """Pick 4-7 reasons from verified facts in rank order. Pure and deterministic. Facts in
+    ``finding_only`` (old, disclosed breaches at a trusted vendor) are never reasons."""
     notes: list[str] = []
-    verified = [f for f in ranked if f.id in passed]
+    verified = [f for f in ranked if f.id in passed and f.id not in finding_only]
     age_facts = [f for f in verified if f.collector == AGE]
 
     # Candidates in rank order; the merged age reason sits where its best fact ranked.
@@ -407,25 +418,56 @@ def select_reasons(
     return [p.reason for p in picks][:MAX_REASONS], notes
 
 
+def _base_topic(topic: str) -> str:
+    return topic.removeprefix("unconfirmed_")
+
+
+def one_source_enough(fact: Fact) -> bool:
+    """Records, reputable press/regulators/courts, the vendor's own negative statement and our
+    own checks may stand alone. Social media, forums, blogs and the rest need a second site."""
+    if fact.source_type == "social":
+        return False
+    return (
+        fact.source_kind == SourceKind.RECORD
+        or fact.source_type in REPUTABLE_TYPES
+        or (fact.source_kind == SourceKind.VENDOR and fact.polarity == Polarity.NEGATIVE)
+        or fact.collector in SELF_EVIDENT_COLLECTORS
+    )
+
+
 def select_findings(
-    finding_ids: list[str], facts: dict[str, Fact], passed: set[str]
+    finding_ids: list[str],
+    facts: dict[str, Fact],
+    passed: set[str],
+    used: frozenset[str] = frozenset(),
 ) -> tuple[list[Finding], list[str]]:
-    """Verified findings with links. Single-source rumours (one independent site, nothing
-    else on the same topic) are dropped."""
+    """Verified findings with links, never repeating a reason (``used``: fact ids behind the
+    reasons, merged age records included). A finding that may not stand on one source needs a
+    second verified fact on the same topic from another site."""
     notes: list[str] = []
-    verified = [facts[i] for i in finding_ids if i in facts and i in passed]
+    verified = [facts[i] for i in finding_ids if i in facts and i in passed and i not in used]
     out: list[Finding] = []
+    seen_events: set[tuple[str, int]] = set()
     for f in verified:
-        if f.source_kind == SourceKind.INDEPENDENT and f.collector not in SELF_EVIDENT_COLLECTORS:
-            same_topic = {
+        event = (_base_topic(f.topic), f.observed_at.year) if f.observed_at else None
+        if event and event in seen_events:
+            notes.append(f"finding {f.id} dropped: same event as an earlier finding")
+            continue
+        if not one_source_enough(f):
+            sites = {
                 registered_domain(g.source_url)
                 for g in facts.values()
-                if g.id in passed and g.topic == f.topic and g.topic and g.polarity == f.polarity
+                if g.id in passed
+                and g.topic
+                and _base_topic(g.topic) == _base_topic(f.topic)
+                and g.polarity == f.polarity
             }
-            if len(same_topic) < 2:
-                notes.append(f"finding {f.id} dropped: single-source report")
+            if len(sites) < 2:
+                notes.append(f"finding {f.id} dropped: needs a second independent source")
                 continue
         out.append(Finding(text=f.statement, source_url=f.source_url, fact_id=f.id))
+        if event:
+            seen_events.add(event)
         if len(out) >= MAX_FINDINGS:
             break
     dropped = [i for i in finding_ids if i not in passed]
@@ -434,10 +476,13 @@ def select_findings(
     return out, notes
 
 
-def candidate_pool(ranked: list[Fact], finding_ids: list[str], size: int) -> list[Fact]:
+def candidate_pool(
+    ranked: list[Fact], finding_ids: list[str], size: int, all_facts: dict[str, Fact]
+) -> list[Fact]:
     """What to verify first: the top of the ranking, every age fact (they merge), the best two
-    facts of each collector (diversity), facts that findings need, and their dependencies."""
-    by_id = {f.id: f for f in ranked}
+    facts of each collector (diversity), facts that findings need (looked up in all facts:
+    finding-only facts are not in the reason ranking), and their dependencies."""
+    by_id = all_facts
     pool: dict[str, Fact] = {f.id: f for f in ranked[:size]}
     per_collector: dict[str, int] = {}
     for f in ranked:
@@ -462,9 +507,10 @@ async def verify_and_select(
     snippets: dict[str, str],
     settings: Settings,
     domain: str = "",
+    finding_only: frozenset[str] = frozenset(),
 ) -> tuple[Selection, list[VerifyResult]]:
     by_id = {f.id: f for f in all_facts}
-    pool = candidate_pool(ranked, finding_ids, FIRST_POOL)
+    pool = candidate_pool(ranked, finding_ids, FIRST_POOL, by_id)
     deps = {
         d for f in pool for d in f.related_fact_ids if d in by_id and d not in {p.id for p in pool}
     }
@@ -474,7 +520,7 @@ async def verify_and_select(
     ranked = [by_id.get(f.id, f) for f in ranked]
     apply_dependencies(by_id, results)
     passed = {fid for fid, r in results.items() if r.passed}
-    reasons, notes = select_reasons(ranked, passed, domain)
+    reasons, notes = select_reasons(ranked, passed, domain, finding_only)
 
     remaining = [f for f in ranked if f.id not in results]
     while len(reasons) < MIN_REASONS and remaining:
@@ -485,9 +531,14 @@ async def verify_and_select(
         ranked = [by_id.get(f.id, f) for f in ranked]
         apply_dependencies(by_id, results)
         passed = {fid for fid, r in results.items() if r.passed}
-        reasons, notes = select_reasons(ranked, passed, domain)
+        reasons, notes = select_reasons(ranked, passed, domain, finding_only)
 
-    findings, finding_notes = select_findings(finding_ids, by_id, passed)
+    # Fact ids behind the reasons: a merged age reason uses every verified age record.
+    used = {r.fact_id for r in reasons}
+    age_ids = {fid for fid, f in by_id.items() if f.collector == AGE}
+    if used & age_ids:
+        used |= age_ids & passed
+    findings, finding_notes = select_findings(finding_ids, by_id, passed, frozenset(used))
     notes += finding_notes
     trace.emit(
         {

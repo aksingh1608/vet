@@ -33,6 +33,9 @@ For each result, return:
   a backlink list, a "submit your tool" site, an auto-generated company profile), "marketplace"
   (an integration or app marketplace listing), "jobs" (a job ad mentioning the product),
   "partner" (a partner page), "other".
+- source_type: who published it: "press" (a news outlet with editorial staff), "regulator",
+  "court", "review" (a review platform), "social" (social media post or profile), "forum",
+  "blog" (personal or company blog, Medium, Substack), "directory", "vendor", "other".
 - is_hard_flag: true only for: insolvency or liquidation, product discontinued, a data breach,
   a regulator's fine, or fraud allegations, clearly about THIS vendor.
 

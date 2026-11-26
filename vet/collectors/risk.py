@@ -5,14 +5,18 @@
 * Tavily news searches in English, plus German for German-speaking vendors. The fast model
   checks each result is about THIS company (not a namesake) and what event it reports.
 
-A news event reported by a single independent site is never a hard flag, its weight is halved
-and its topic is ``unconfirmed_<event>``, so it is not a real negative and never a finding: one
-article is a lead. The vendor's own announcement (e.g. a shutdown
-notice) counts on its own.
+One report is enough when it comes from reputable press, a regulator or a court, or when the
+vendor itself announces the negative fact (shutdown, breach notice, acquisition). Anything else
+(social media, forums, blogs) needs a second independent site; until then it is never a hard
+flag, its weight is halved and its topic is ``unconfirmed_<event>``.
+
+Breaches carry their year (``observed_at``) and a ``disclosed`` tag when the vendor announced
+them, so the judge can tell recent or hidden breaches from old, disclosed ones.
 """
 
 import json
 import logging
+import re
 from datetime import UTC, datetime
 
 from pydantic import BaseModel
@@ -22,6 +26,7 @@ from vet.collectors.base import Context, fact_id
 from vet.collectors.footprint import search_name
 from vet.llm import load_prompt, untrusted
 from vet.schemas import Axis, Fact, Polarity, SourceKind
+from vet.sources import REPUTABLE_TYPES, source_type_for
 from vet.tavily import TavilyResult
 from vet.text import contains_quote, registered_domain, same_site, truncate
 
@@ -39,7 +44,6 @@ MAX_RESULTS_TO_CLASSIFY = 16
 SNIPPET_CHARS = 1200
 GERMAN_SPEAKING = {"DE", "AT", "CH"}
 
-EVENTS = ("breach", "lawsuit", "fine", "insolvency", "acquisition", "discontinued", "layoffs")
 # event -> (axis, polarity, base weight, may be a hard flag)
 EVENT_RULES: dict[str, tuple[Axis, Polarity, float, bool]] = {
     "breach": (Axis.TRUST, Polarity.NEGATIVE, 0.6, True),
@@ -49,8 +53,11 @@ EVENT_RULES: dict[str, tuple[Axis, Polarity, float, bool]] = {
     "discontinued": (Axis.REAL_ALIVE, Polarity.NEGATIVE, 0.9, True),
     "acquisition": (Axis.REAL_ALIVE, Polarity.NEUTRAL, 0.2, False),
     "layoffs": (Axis.TRUST, Polarity.NEGATIVE, 0.2, False),
+    # Attacks on users, not on the vendor's systems (credential stuffing, phishing, DDoS).
+    "security_incident": (Axis.TRUST, Polarity.NEGATIVE, 0.3, False),
 }
 HARD_SEVERITY = 0.7
+EVENTS = tuple(EVENT_RULES)
 
 
 class _Item(BaseModel):
@@ -59,6 +66,8 @@ class _Item(BaseModel):
     independent: bool
     event: str
     date: str
+    source_type: str
+    vendor_disclosed: bool
     # Field order is generation order: the quote is chosen before the sentence is written.
     quote: str
     statement: str
@@ -101,6 +110,8 @@ def breach_fact(breach: dict[str, object], n: int, url: str, today: datetime) ->
         is_hard_flag=serious,
         topic="breach",
         observed_at=when,
+        source_type="record",
+        code_worded=True,
     )
 
 
@@ -161,11 +172,14 @@ def news_facts_from(
     facts: list[Fact] = []
     for item, _, own in kept:
         axis, polarity, base, may_be_hard = EVENT_RULES[item.event]
-        corroborated = own or len(sites.get(item.event, set())) >= 2
+        kind = "vendor" if own else source_type_for(item.url, item.source_type)
+        corroborated = own or kind in REPUTABLE_TYPES or len(sites.get(item.event, set())) >= 2
         severity = min(max(item.severity, 0.0), 1.0)
         weight = max(base, severity) if polarity == Polarity.NEGATIVE else base
         hard = may_be_hard and corroborated and severity >= HARD_SEVERITY
         topic = item.event
+        year = _year(item.date)
+        tags = ["disclosed"] if item.event == "breach" and (own or item.vendor_disclosed) else []
         if not corroborated:
             # One article is a lead: half weight, never a hard flag, never a real negative.
             weight = round(weight / 2, 2)
@@ -184,9 +198,17 @@ def news_facts_from(
                 fetched_at=today,
                 is_hard_flag=hard,
                 topic=topic,
+                source_type=kind,
+                tags=tags,
+                observed_at=datetime(year, 1, 1, tzinfo=UTC) if year else None,
             )
         )
     return facts
+
+
+def _year(text: str) -> int | None:
+    m = re.search(r"\b(19[89]\d|20\d{2})\b", text)
+    return int(m.group(1)) if m else None
 
 
 async def news_facts(ctx: Context, today: datetime, start: int) -> list[Fact]:

@@ -6,7 +6,10 @@
    * domain history over 10 years + at least 2 independent positive facts from distinct
      sources + no hard flags -> trust is at least "trust", lowered only by real negatives
      (breach, lawsuit, fine, insolvency, contradicted claim, frozen or discontinued product);
-   * mixed review scores are a minor negative that never enters the scores.
+   * mixed review scores are a minor negative that never enters the scores;
+   * breaches: one younger than ``breach_recent_years`` or never disclosed by the vendor makes
+     trust "caution". An older, disclosed breach at a vendor that meets the trust floor keeps
+     "trust" and becomes a finding, not a reason.
 2. LLM judge: picks labels within the allowed set and ranks fact ids (reasons and findings).
    Reasons and findings are built in code from verified facts, so no source can be invented.
 """
@@ -16,7 +19,7 @@ import logging
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from vet.llm import LLMError, StructuredLLM, load_prompt, untrusted
 from vet.schemas import Axis, Claim, ClaimCheck, Fact, Polarity, RealAlive, SourceKind, Trust
@@ -35,6 +38,7 @@ TIE_BREAK_COLLECTORS = frozenset({"looks"})
 MAX_CANDIDATES = 10
 MAX_FINDINGS = 5
 
+DEFAULT_BREACH_RECENT_YEARS = 3
 TRUST_FLOOR_HISTORY_YEARS = 10.0
 TRUST_FLOOR_INDEPENDENT_SOURCES = 2
 AGE_EVIDENCE_TOPICS = frozenset({"domain_registered", "first_capture", "first_certificate"})
@@ -54,10 +58,41 @@ class RuleOutcome:
     eligible: list[Fact]  # facts the judge may cite
     scores: dict[str, float] = field(default_factory=dict)
     notes: list[str] = field(default_factory=list)
+    finding_only: set[str] = field(default_factory=set)  # findings, never reasons
 
     @property
     def eligible_ids(self) -> set[str]:
         return {f.id for f in self.eligible}
+
+
+@dataclass
+class BreachAssessment:
+    blocking: list[Fact]  # recent or undisclosed: trust becomes "caution"
+    old_disclosed: list[Fact]  # may keep "trust" at a long-standing, well-evidenced vendor
+
+
+def assess_breaches(
+    facts: list[Fact], today: datetime, recent_years: int, notices: list[Fact] | None = None
+) -> BreachAssessment:
+    """Sort breach facts into blocking and old-and-disclosed. A breach without a date counts
+    as recent. It counts as disclosed when it carries the ``disclosed`` tag, or another fact
+    (in ``notices``, default ``facts``) tagged ``disclosed`` dates from the same year (+-1) or
+    has no date."""
+    breaches = [f for f in facts if f.topic == "breach" and f.polarity == Polarity.NEGATIVE]
+    notices = [f for f in (facts if notices is None else notices) if "disclosed" in f.tags]
+    years = {f.observed_at.year for f in notices if f.observed_at}
+    undated_notice = any(f.observed_at is None for f in notices)
+    out = BreachAssessment(blocking=[], old_disclosed=[])
+    for b in breaches:
+        when = b.observed_at
+        recent = when is None or (today - when).days / 365.25 < recent_years
+        disclosed = (
+            "disclosed" in b.tags
+            or undated_notice
+            or (when is not None and any(abs(y - when.year) <= 1 for y in years))
+        )
+        (out.blocking if recent or not disclosed else out.old_disclosed).append(b)
+    return out
 
 
 def _sum(facts: list[Fact], axis: Axis, polarity: Polarity) -> float:
@@ -76,6 +111,10 @@ def is_real_negative(fact: Fact) -> bool:
     return fact.polarity == Polarity.NEGATIVE and (
         fact.is_hard_flag or fact.topic in REAL_NEGATIVE_TOPICS
     )
+
+
+def is_breach(fact: Fact) -> bool:
+    return fact.topic == "breach" and fact.polarity == Polarity.NEGATIVE
 
 
 def history_years(facts: list[Fact], today: datetime) -> float:
@@ -97,7 +136,15 @@ def independent_positive_sources(facts: list[Fact]) -> set[str]:
     }
 
 
-def apply_rules(facts: list[Fact], today: datetime | None = None) -> RuleOutcome:
+def apply_rules(
+    facts: list[Fact],
+    today: datetime | None = None,
+    breach_recent_years: int = DEFAULT_BREACH_RECENT_YEARS,
+    failed: frozenset[str] = frozenset(),
+) -> RuleOutcome:
+    """``failed``: negative facts whose source did not verify. They no longer count against
+    the vendor (hard flags, breaches, real negatives, scores), but a breach notice among them
+    still counts as disclosure."""
     notes: list[str] = []
     # Rule 1: vendor-sourced facts never count as positive evidence.
     eligible = [
@@ -107,9 +154,14 @@ def apply_rules(facts: list[Fact], today: datetime | None = None) -> RuleOutcome
     ]
     if len(eligible) < len(facts):
         notes.append(f"ignored {len(facts) - len(eligible)} vendor-sourced positive facts")
+    # Negative facts that failed verification are not held against the vendor.
+    dropped = [f for f in eligible if f.id in failed and f.polarity == Polarity.NEGATIVE]
+    if dropped:
+        notes.append(f"{len(dropped)} unverified negative fact(s) not held against the vendor")
+    counted = [f for f in eligible if f not in dropped]
     # Rule 4: looks facts only break ties, so they do not enter the scores. Mixed review
     # scores are a minor negative and do not enter them either.
-    scored = [f for f in eligible if f.collector not in TIE_BREAK_COLLECTORS and not is_minor(f)]
+    scored = [f for f in counted if f.collector not in TIE_BREAK_COLLECTORS and not is_minor(f)]
     evidence = [f for f in scored if f.source_kind != SourceKind.VENDOR]
 
     ra_pos = _sum(evidence, Axis.REAL_ALIVE, Polarity.POSITIVE)
@@ -119,9 +171,12 @@ def apply_rules(facts: list[Fact], today: datetime | None = None) -> RuleOutcome
     ra_neg_count = sum(
         1 for f in scored if f.axis == Axis.REAL_ALIVE and f.polarity == Polarity.NEGATIVE
     )
-    hard = [f for f in eligible if f.is_hard_flag]
+    # Breaches have their own rule (below); every other hard flag caps as before.
+    hard = [f for f in counted if f.is_hard_flag and not is_breach(f)]
     hard_ra = [f for f in hard if f.axis == Axis.REAL_ALIVE]
     hard_tr = [f for f in hard if f.axis == Axis.TRUST]
+    today = today or max((f.fetched_at for f in facts), default=datetime.now(UTC))
+    breaches = assess_breaches(counted, today, breach_recent_years, notices=eligible)
 
     allowed_ra = list(REAL_ALIVE_ORDER)
     allowed_tr = list(TRUST_ORDER)
@@ -151,15 +206,32 @@ def apply_rules(facts: list[Fact], today: datetime | None = None) -> RuleOutcome
         notes.append("trust=trust not allowed: no record/independent trust evidence")
 
     # Trust floor: a long, consistent history plus independent evidence and no hard flags.
-    today = today or max((f.fetched_at for f in facts), default=datetime.now(UTC))
     years = history_years(eligible, today)
     sources = independent_positive_sources(eligible)
-    real_negatives = [f for f in eligible if is_real_negative(f)]
-    if (
+    old_ids = {f.id for f in breaches.old_disclosed}
+    real_negatives = [f for f in counted if is_real_negative(f) and f.id not in old_ids]
+    floor_met = (
         not hard
         and years > TRUST_FLOOR_HISTORY_YEARS
         and len(sources) >= TRUST_FLOOR_INDEPENDENT_SOURCES
-    ):
+    )
+    finding_only: set[str] = set()
+    if breaches.blocking or (breaches.old_disclosed and not floor_met):
+        # Recent or undisclosed breach (or an old one without the floor): "caution", unless
+        # another hard flag already allows worse.
+        allowed_tr = [t for t in allowed_tr if t != Trust.TRUST] if hard else [Trust.CAUTION]
+        named = breaches.blocking or breaches.old_disclosed
+        notes.append(
+            f"trust capped at caution by {len(named)} breach(es): "
+            + ("recent or undisclosed" if breaches.blocking else "old and disclosed, no floor")
+        )
+    elif floor_met:
+        finding_only = old_ids
+        if old_ids:
+            notes.append(
+                f"{len(old_ids)} old, disclosed breach(es) at a vendor meeting the trust floor:"
+                " finding, not a downgrade"
+            )
         if real_negatives:
             allowed_tr = [Trust.CAUTION, Trust.TRUST]
             notes.append(
@@ -186,8 +258,11 @@ def apply_rules(facts: list[Fact], today: datetime | None = None) -> RuleOutcome
             "history_years": years,
             "independent_sources": float(len(sources)),
             "real_negatives": float(len(real_negatives)),
+            "breaches_blocking": float(len(breaches.blocking)),
+            "breaches_old_disclosed": float(len(breaches.old_disclosed)),
         },
         notes=notes,
+        finding_only=finding_only,
     )
 
 
@@ -218,8 +293,8 @@ def rank_facts(facts: list[Fact]) -> list[Fact]:
 
 def finding_candidates(facts: list[Fact]) -> list[str]:
     """Facts that are findings whether or not the judge picks them: contradictions, founding
-    year gaps and real negatives (AGENTS.md decision 2)."""
-    return [f.id for f in rank_facts(facts) if is_forced(f) or is_real_negative(f)]
+    year gaps, breaches and other real negatives (AGENTS.md decision 2)."""
+    return [f.id for f in rank_facts(facts) if is_forced(f) or is_real_negative(f) or is_breach(f)]
 
 
 def rules_only_labels(rules: RuleOutcome) -> tuple[RealAlive, Trust]:
@@ -260,6 +335,7 @@ class Judgement(BaseModel):
     finding_fact_ids: list[str]
     used_llm: bool
     notes: list[str]
+    finding_only_ids: list[str] = Field(default_factory=list)
 
 
 def _judge_input(
@@ -302,9 +378,11 @@ async def judge(
     claims: list[Claim],
     facts: list[Fact],
     checks: list[ClaimCheck] | None = None,
+    breach_recent_years: int = DEFAULT_BREACH_RECENT_YEARS,
 ) -> Judgement:
-    rules = apply_rules(facts)
-    ranked = [f.id for f in rank_facts(rules.eligible)]
+    rules = apply_rules(facts, breach_recent_years=breach_recent_years)
+    only = rules.finding_only
+    ranked = [f.id for f in rank_facts(rules.eligible) if f.id not in only]
     must_find = finding_candidates(rules.eligible)
     try:
         out = await llm.structured(
@@ -323,15 +401,16 @@ async def judge(
             confidence=0.3,
             summary="Verdict from deterministic rules only (LLM judge unavailable).",
             ranked_fact_ids=ranked,
-            finding_fact_ids=must_find[:MAX_FINDINGS],
+            finding_fact_ids=must_find[: MAX_FINDINGS * 2],
             used_llm=False,
             notes=rules.notes,
+            finding_only_ids=sorted(only),
         )
 
     allowed_ids = rules.eligible_ids
     picked: list[str] = []
     for fid in out.reason_fact_ids:
-        if fid in allowed_ids and fid not in picked:
+        if fid in allowed_ids and fid not in picked and fid not in only:
             picked.append(fid)
     dropped = len(out.reason_fact_ids) - len(picked)
     notes = list(rules.notes)
@@ -357,4 +436,31 @@ async def judge(
         finding_fact_ids=findings[: MAX_FINDINGS * 2],
         used_llm=True,
         notes=notes,
+        finding_only_ids=sorted(only),
+    )
+
+
+def relabel_after_verification(
+    judgement: Judgement,
+    facts: list[Fact],
+    failed: set[str],
+    breach_recent_years: int = DEFAULT_BREACH_RECENT_YEARS,
+) -> Judgement:
+    """Re-apply the rules without the negative facts that failed verification and move the
+    labels to the nearest label the rules now allow."""
+    negatives = {f.id for f in facts if f.id in failed and f.polarity == Polarity.NEGATIVE}
+    if not negatives:
+        return judgement
+    rules = apply_rules(facts, breach_recent_years=breach_recent_years, failed=frozenset(negatives))
+    ra = clamp(judgement.real_alive, rules.allowed_real_alive, REAL_ALIVE_ORDER)
+    tr = clamp(judgement.trust, rules.allowed_trust, TRUST_ORDER)
+    notes = [*judgement.notes, *[n for n in rules.notes if "unverified" in n]]
+    if (ra, tr) != (judgement.real_alive, judgement.trust):
+        notes.append(f"after verification: {judgement.real_alive}->{ra}, {judgement.trust}->{tr}")
+    return judgement.model_copy(
+        update={
+            "real_alive": ra,
+            "trust": tr,
+            "notes": notes,
+        }
     )
