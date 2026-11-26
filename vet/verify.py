@@ -19,11 +19,16 @@ Selection (``select_reasons``, deterministic):
 * At least one real_alive and one trust reason when a verified fact exists for each.
 * Filler (copyright year, directory listings, site looks) only when nothing better exists.
 
-Findings follow the same rules: verified facts only, each with its link. One source is enough
-for a record, reputable press, a regulator or a court, the vendor's own statement of a negative
-fact, or our own checks (guard, claims_check); everything else (social media, forums, blogs,
-anonymous sources) needs a second independent site on the same topic. Findings never repeat a
-reason: they are for extra discoveries.
+* If no verified trust fact is left for the trust axis but an old, disclosed breach was kept as
+  a finding, that breach becomes the trust reason (as the record states it, plus the
+  disclosure when a disclosure source verified). The verdict does not change.
+
+Findings: verified, notable facts that did not make the reasons (neither the fact nor the same
+event), ranked by strength: contradictions first, then hard flags, breaches and other real
+negatives, then strong facts by weight. At most MAX_FINDINGS. One source is enough for a
+record, reputable press, a regulator or a court, the vendor's own statement of a negative fact,
+or our own checks (guard, claims_check); everything else (social media, forums, blogs,
+anonymous sources) needs a second independent site on the same topic.
 """
 
 import asyncio
@@ -36,7 +41,7 @@ from pydantic import BaseModel
 from vet import trace
 from vet.config import API_HOSTS, Settings
 from vet.fetch import Fetcher, FetchError, FetchResult, FetchStatusError, host_matches, host_of
-from vet.judge import is_forced
+from vet.judge import is_breach, is_forced, is_real_negative
 from vet.llm import LLMError, StructuredLLM, load_prompt, untrusted
 from vet.schemas import (
     MAX_REASONS,
@@ -54,7 +59,8 @@ from vet.text import contains_quote, registered_domain
 logger = logging.getLogger(__name__)
 
 FIRST_POOL = 24
-MAX_FINDINGS = 5
+MAX_FINDINGS = 3
+NOTABLE_WEIGHT = 0.5  # a positive or neutral fact this strong is notable on its own
 # Sentences written by our code from a record or a pattern match: no model support check.
 CODE_WORDED_COLLECTORS = frozenset(
     {"age", "guard", "claims_check", "alive", "looks", "site_reader"}
@@ -326,6 +332,7 @@ def select_reasons(
     passed: set[str],
     domain: str = "",
     finding_only: frozenset[str] = frozenset(),
+    trust_fallback: Reason | None = None,
 ) -> tuple[list[Reason], list[str]]:
     """Pick 4-7 reasons from verified facts in rank order. Pure and deterministic. Facts in
     ``finding_only`` (old, disclosed breaches at a trusted vendor) are never reasons."""
@@ -400,6 +407,15 @@ def select_reasons(
             ),
             None,
         )
+        if spare is None and axis == Axis.TRUST and trust_fallback is not None:
+            fallback = _Pick(trust_fallback, "risk", False)
+            unforced = [i for i, p in enumerate(picks) if not p.forced]
+            if len(picks) < MAX_REASONS:
+                picks.append(fallback)
+            elif unforced:
+                picks[unforced[-1]] = fallback  # replaces the weakest unforced reason
+            notes.append(f"finding-only breach {trust_fallback.fact_id} used as the trust reason")
+            continue
         if spare is None:
             notes.append(f"no verified {axis} fact: axis not covered")
             continue
@@ -435,23 +451,60 @@ def one_source_enough(fact: Fact) -> bool:
     )
 
 
+def _event(fact: Fact) -> tuple[str, int] | None:
+    return (_base_topic(fact.topic), fact.observed_at.year) if fact.observed_at else None
+
+
+def is_notable(fact: Fact) -> bool:
+    if fact.is_filler or (
+        fact.source_kind == SourceKind.VENDOR and fact.polarity != Polarity.NEGATIVE
+    ):
+        return False
+    return (
+        is_forced(fact)
+        or fact.is_hard_flag
+        or is_breach(fact)
+        or is_real_negative(fact)
+        or fact.weight >= NOTABLE_WEIGHT
+    )
+
+
+def strength(fact: Fact) -> tuple[bool, bool, bool, float, str]:
+    """Sort key, strongest first: contradictions, hard flags, breaches/real negatives, weight."""
+    return (
+        not is_forced(fact),
+        not fact.is_hard_flag,
+        not (is_breach(fact) or is_real_negative(fact)),
+        -fact.weight,
+        fact.id,
+    )
+
+
 def select_findings(
     finding_ids: list[str],
     facts: dict[str, Fact],
     passed: set[str],
     used: frozenset[str] = frozenset(),
 ) -> tuple[list[Finding], list[str]]:
-    """Verified findings with links, never repeating a reason (``used``: fact ids behind the
-    reasons, merged age records included). A finding that may not stand on one source needs a
-    second verified fact on the same topic from another site."""
+    """Verified, notable facts that are not reasons (``used``: fact ids behind the reasons,
+    merged age records included; also no second report of a reason's event), strongest first,
+    at most MAX_FINDINGS. ``finding_ids`` (the judge's picks and the rule candidates) are always
+    considered; every other verified notable fact is too. A finding that may not stand on one
+    source needs a second verified fact on the same topic from another site."""
     notes: list[str] = []
-    verified = [facts[i] for i in finding_ids if i in facts and i in passed and i not in used]
+    pool = dict.fromkeys([*finding_ids, *(fid for fid, f in facts.items() if is_notable(f))])
+    verified = sorted(
+        (facts[i] for i in pool if i in facts and i in passed and i not in used),
+        key=strength,
+    )
     out: list[Finding] = []
-    seen_events: set[tuple[str, int]] = set()
+    seen_events: set[tuple[str, int]] = {
+        e for i in used if i in facts and (e := _event(facts[i])) is not None
+    }
     for f in verified:
-        event = (_base_topic(f.topic), f.observed_at.year) if f.observed_at else None
+        event = _event(f)
         if event and event in seen_events:
-            notes.append(f"finding {f.id} dropped: same event as an earlier finding")
+            notes.append(f"finding {f.id} dropped: same event as a reason or earlier finding")
             continue
         if not one_source_enough(f):
             sites = {
@@ -470,10 +523,52 @@ def select_findings(
             seen_events.add(event)
         if len(out) >= MAX_FINDINGS:
             break
-    dropped = [i for i in finding_ids if i not in passed]
+    dropped = [i for i in finding_ids if i in facts and i not in passed]
     if dropped:
         notes.append(f"findings not verified, dropped: {', '.join(dropped)}")
     return out, notes
+
+
+def breach_reason(
+    finding_only: frozenset[str], facts: dict[str, Fact], passed: set[str]
+) -> Reason | None:
+    """The trust reason built from an old, disclosed breach kept as a finding: the record's
+    own observation (records first), plus the disclosure when a disclosure source verified."""
+    breaches = sorted(
+        (facts[i] for i in finding_only if i in facts and i in passed),
+        key=lambda f: (f.source_kind != SourceKind.RECORD, strength(f)),
+    )
+    breaches = [f for f in breaches if f.axis == Axis.TRUST]
+    if not breaches:
+        return None
+    breach = breaches[0]
+    notice = next((f for f in facts.values() if f.id in passed and "disclosed" in f.tags), None)
+    text = breach.statement.rstrip(".")
+    if notice is not None:
+        text += f"; the vendor disclosed it ({registered_domain(notice.source_url)})"
+    return Reason(
+        text=text,
+        axis=Axis.TRUST,
+        polarity=breach.polarity,
+        source_url=breach.source_url,
+        quote=breach.quote,
+        fact_id=breach.id,
+    )
+
+
+def used_by_reasons(
+    reasons: list[Reason], facts: dict[str, Fact], passed: set[str], finding_only: frozenset[str]
+) -> frozenset[str]:
+    """Fact ids a finding may not repeat: each reason's fact; every verified age record when
+    the merged age reason is used; and, when a breach became the trust reason, every
+    finding-only breach fact and disclosure notice (they describe the same incident)."""
+    used = {r.fact_id for r in reasons}
+    age_ids = {fid for fid, f in facts.items() if f.collector == AGE}
+    if used & age_ids:
+        used |= age_ids & passed
+    if used & finding_only:
+        used |= finding_only | {fid for fid, f in facts.items() if "disclosed" in f.tags}
+    return frozenset(used)
 
 
 def candidate_pool(
@@ -520,7 +615,8 @@ async def verify_and_select(
     ranked = [by_id.get(f.id, f) for f in ranked]
     apply_dependencies(by_id, results)
     passed = {fid for fid, r in results.items() if r.passed}
-    reasons, notes = select_reasons(ranked, passed, domain, finding_only)
+    fallback = breach_reason(finding_only, by_id, passed)
+    reasons, notes = select_reasons(ranked, passed, domain, finding_only, fallback)
 
     remaining = [f for f in ranked if f.id not in results]
     while len(reasons) < MIN_REASONS and remaining:
@@ -531,14 +627,11 @@ async def verify_and_select(
         ranked = [by_id.get(f.id, f) for f in ranked]
         apply_dependencies(by_id, results)
         passed = {fid for fid, r in results.items() if r.passed}
-        reasons, notes = select_reasons(ranked, passed, domain, finding_only)
+        fallback = breach_reason(finding_only, by_id, passed)
+        reasons, notes = select_reasons(ranked, passed, domain, finding_only, fallback)
 
-    # Fact ids behind the reasons: a merged age reason uses every verified age record.
-    used = {r.fact_id for r in reasons}
-    age_ids = {fid for fid, f in by_id.items() if f.collector == AGE}
-    if used & age_ids:
-        used |= age_ids & passed
-    findings, finding_notes = select_findings(finding_ids, by_id, passed, frozenset(used))
+    used = used_by_reasons(reasons, by_id, passed, finding_only)
+    findings, finding_notes = select_findings(finding_ids, by_id, passed, used)
     notes += finding_notes
     trace.emit(
         {

@@ -15,6 +15,8 @@ Nothing else goes in this section. DEFENCE.md cites only this section.
 | 2026-11-26 | feat/phase-3-signals (PR #3) | Norma GitHub App PR check | — | files changed by PR #3 (incl. the 16 test files not sent to `live_check`) | — | clean | "No issues introduced by your changes." [Report](https://norma.qualityclouds.com/projects/12410) |
 | 2026-11-26 | feat/phase-4-eval | `live_check` (fastapi ruleset) | fa-mnt-no-typing-param | vet/config.py:130 | MEDIUM | fixed | Raised on the pydantic `field_validator` for `output_format` (untyped `cls`; not a FastAPI route). Replaced the validator with a `Literal["json", "csv"]` field type, which pydantic validates itself; the env value is lower-cased in `from_env`. Same behaviour, re-check clean. |
 | 2026-11-26 | feat/phase-4-eval | `live_check` | — | 13 changed source files (vet/, eval/run_eval.py) | — | clean | After the fix above, 0 issues. `pyproject.toml`: `not_checkable`. `uv.lock` (only change: pyyaml 6.0.4 added) and the changed test files were not sent (free plan); the Norma GitHub App check on PR #4 covers them. |
+| 2026-11-26 | feat/phase-4-eval (PR #4) | Norma GitHub App PR check | — | files changed by PR #4 | — | clean | "No issues introduced by your changes." [Report](https://norma.qualityclouds.com/projects/12410) |
+| 2026-11-26 | feat/phase-4b-hollow | `live_check` | — | vet/judge.py, vet/verify.py, vet/cli.py | — | clean | 0 issues. New tests left to the Norma GitHub App check on PR #5. |
 
 ## Self-review notes (not Norma findings)
 
