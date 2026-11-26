@@ -2,13 +2,19 @@
 components (fetcher, LLM, Tavily) can log to the right product without passing it around."""
 
 import json
+import logging
 import time
-from contextvars import ContextVar
+from collections.abc import Callable
+from contextvars import ContextVar, Token
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel, Field
+
+logger = logging.getLogger(__name__)
+
+Listener = Callable[[dict[str, Any]], None]
 
 
 class Usage(BaseModel):
@@ -37,7 +43,15 @@ class Trace(BaseModel):
         return round(time.monotonic() - self._t0, 3)
 
     def emit(self, event: dict[str, Any]) -> None:
-        self.events.append({"t": self.elapsed(), **event})
+        stamped = {"t": self.elapsed(), **event}
+        self.events.append(stamped)
+        listener = _listener.get()
+        if listener is None:
+            return
+        try:
+            listener({"product": self.product_url, **stamped})
+        except Exception:  # noqa: BLE001 - a display hook must never break a run
+            logger.warning("trace listener failed", exc_info=True)
 
     def write_jsonl(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -47,6 +61,17 @@ class Trace(BaseModel):
 
 
 _current: ContextVar[Trace | None] = ContextVar("vet_trace", default=None)
+# Optional observer of every trace event (e.g. the live demo display). Set it before the
+# event loop starts; tasks copy the context, so every product run sees it.
+_listener: ContextVar[Listener | None] = ContextVar("vet_trace_listener", default=None)
+
+
+def set_listener(listener: Listener | None) -> Token[Listener | None]:
+    return _listener.set(listener)
+
+
+def reset_listener(token: Token[Listener | None]) -> None:
+    _listener.reset(token)
 
 
 def current() -> Trace | None:

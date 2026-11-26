@@ -186,6 +186,41 @@ def run(
 
 
 @app.command()
+def demo(
+    url: Annotated[
+        str | None,
+        typer.Argument(help="Product URL. Optional with --from-run when the run has one product."),
+    ] = None,
+    from_run: Annotated[
+        Path | None,
+        typer.Option("--from-run", help="Replay a saved runs/<id> without the network."),
+    ] = None,
+    advanced: Annotated[bool, typer.Option("--advanced", help="Tavily advanced search.")] = False,
+) -> None:
+    """Vet one product with live progress, then show the verdict panel (for the pitch)."""
+    from vet.demo import DemoError, pick_record, replay, run_live
+
+    if from_run is not None:
+        if not from_run.is_dir():
+            console.print(f"[red]{from_run} is not a run directory.[/red]")
+            raise typer.Exit(code=2)
+        try:
+            record = pick_record(load_records(from_run), url)
+        except (DemoError, ValueError) as exc:
+            console.print(f"[red]✗[/red] {exc}")
+            raise typer.Exit(code=1) from exc
+        replay(record, console, from_run)
+        return
+    if not url:
+        console.print("[red]Give a URL, or --from-run RUN_DIR.[/red]")
+        raise typer.Exit(code=2)
+    settings = _settings(advanced, None)
+    _, run_dir = run_live(url, settings, _git_sha(), console, REPORT_DIR)
+    console.print(f"run:    {run_dir}")
+    console.print(f"report: {run_dir / REPORT_DIR}")
+
+
+@app.command()
 def validate(
     verdicts: Annotated[Path, typer.Argument(help="runs/<id> or its verdict file.")],
 ) -> None:
