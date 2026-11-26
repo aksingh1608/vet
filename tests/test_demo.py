@@ -215,3 +215,28 @@ def test_replay_times_judge_from_the_saved_trace(tmp_path, settings, no_network)
     demo.replay(rec, console, tmp_path / "no-trace")
     judge_line = next(ln for ln in console.export_text().splitlines() if demo.JUDGE_STEP in ln)
     assert "✓" in judge_line and "0.0s" not in judge_line
+
+
+def test_demo_validates_the_verdict_file_like_vet_run(
+    tmp_path, settings, monkeypatch, no_network, out
+) -> None:
+    # record()'s finding links to javascript:, which the verdict-file check rejects.
+    async def fake_run_many(urls, s, git_sha, run_id=None):  # noqa: ANN001
+        return run_id or "same-run", [record()], [Trace(product_url="https://acme.example/")]
+
+    monkeypatch.setattr(demo, "run_many", fake_run_many)
+    monkeypatch.setattr("vet.orchestrator.run_many", fake_run_many)
+    local = settings.model_copy(update={"runs_dir": tmp_path / "runs"})
+    monkeypatch.setattr(cli, "_settings", lambda advanced, fmt: local)
+
+    def problems(command: list[str]) -> list[str]:
+        start = len(out.export_text(clear=False))
+        result = runner.invoke(cli.app, command)
+        assert result.exit_code == 0, result.output
+        lines = out.export_text(clear=False)[start:].splitlines()
+        return [ln.strip() for ln in lines if ln.strip().startswith(("✗", "✓ verdict file"))]
+
+    from_demo = problems(["demo", "acme.example"])
+    from_run = problems(["run", "acme.example"])
+    assert from_demo == from_run
+    assert from_demo == ["✗ verdict 0 (https://acme.example/): finding 0 has no openable link"]

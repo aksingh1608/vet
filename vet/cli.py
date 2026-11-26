@@ -135,6 +135,29 @@ def _merge(existing: list[ProductRecord], new: list[ProductRecord]) -> list[Prod
     return merged + list(fresh.values())
 
 
+def _save_run(
+    run_dir: Path, records: list[ProductRecord], traces: list, settings: Settings
+) -> tuple[Path, list[str], list[Path]]:
+    """Write the run, validate its verdict file and render the private report.
+
+    The one path every command that produces a run goes through (``run`` and ``demo``).
+    """
+    from vet.report import render
+
+    verdicts_path = write_run(run_dir, records, traces, settings)
+    problems = validate_verdict_file(verdicts_path, settings)
+    report = render(run_dir, run_dir / REPORT_DIR)
+    return verdicts_path, problems, report
+
+
+def _print_problems(problems: list[str], started: float) -> None:
+    if problems:
+        for problem in problems:
+            console.print(f"[red]✗[/red] {problem}")
+    else:
+        console.print(f"[green]✓[/green] verdict file valid ({time.monotonic() - started:.0f}s)")
+
+
 @app.command()
 def run(
     urls: Annotated[list[str] | None, typer.Argument(help="Product URLs to vet.")] = None,
@@ -154,7 +177,6 @@ def run(
 ) -> None:
     """Vet products: verdict file + HTML report in runs/<id>/, summary table here."""
     from vet.orchestrator import run_many
-    from vet.report import render
 
     targets = _read_urls(urls, file)
     if not targets:
@@ -171,18 +193,12 @@ def run(
     run_dir = into or settings.runs_dir / run_id
     if into is not None:
         records = _merge(load_records(into), records)
-    verdicts_path = write_run(run_dir, records, traces, settings)
-    problems = validate_verdict_file(verdicts_path, settings)
-    report = render(run_dir, run_dir / REPORT_DIR)
+    verdicts_path, problems, report = _save_run(run_dir, records, traces, settings)
 
     console.print(_summary_table(f"run {run_id}", records))
     console.print(f"verdicts: {verdicts_path}")
     console.print(f"report:   {report[-1]}")
-    if problems:
-        for problem in problems:
-            console.print(f"[red]✗[/red] {problem}")
-    else:
-        console.print(f"[green]✓[/green] verdict file valid ({time.monotonic() - started:.0f}s)")
+    _print_problems(problems, started)
 
 
 @app.command()
@@ -198,7 +214,7 @@ def demo(
     advanced: Annotated[bool, typer.Option("--advanced", help="Tavily advanced search.")] = False,
 ) -> None:
     """Vet one product with live progress, then show the verdict panel (for the pitch)."""
-    from vet.demo import DemoError, pick_record, replay, run_live
+    from vet.demo import DemoError, pick_record, replay, run_live, verdict_panel
 
     if from_run is not None:
         if not from_run.is_dir():
@@ -215,9 +231,14 @@ def demo(
         console.print("[red]Give a URL, or --from-run RUN_DIR.[/red]")
         raise typer.Exit(code=2)
     settings = _settings(advanced, None)
-    _, run_dir = run_live(url, settings, _git_sha(), console, REPORT_DIR)
-    console.print(f"run:    {run_dir}")
-    console.print(f"report: {run_dir / REPORT_DIR}")
+    started = time.monotonic()
+    run_id, records, traces = run_live(url, settings, _git_sha(), console)
+    run_dir = settings.runs_dir / run_id
+    verdicts_path, problems, report = _save_run(run_dir, records, traces, settings)
+    console.print(verdict_panel(records[0]))
+    console.print(f"verdicts: {verdicts_path}")
+    console.print(f"report:   {report[-1]}")
+    _print_problems(problems, started)
 
 
 @app.command()
