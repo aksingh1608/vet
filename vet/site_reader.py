@@ -3,9 +3,11 @@
 and strips it, with hidden text and comments, before anything reaches the LLM.
 
 Blocked pages (HTTP 403 or 429): the homepage and the key pages (legal, about, customers,
-pricing) are read from the newest Wayback Machine capture instead. The source of every claim
-and fact from such a page is the snapshot URL, and fact statements say "archived copy of
-<date>". A missing capture is not a dead page, so archived pages never yield 404 facts.
+pricing; one each) are read from the Wayback Machine instead: the homepage from its newest
+capture with status 200, the key pages from the capture closest to it (one request each, to
+stay inside the Wayback rate limit). The source of every claim and fact from such a page is
+the snapshot URL, and fact statements say "archived copy of <date>". A missing capture is not
+a dead page, so archived pages never yield 404 facts.
 
 Everything here is VENDOR-sourced. Claims are things to check; site facts can only count
 against the vendor, never for it.
@@ -143,31 +145,46 @@ WAYBACK_NEWEST_OK = (
     "&filter=statuscode:200&limit=-1"
 )
 WAYBACK_SNAPSHOT = "https://web.archive.org/web/{ts}/{url}"
-_WAYBACK = re.compile(r"^https?://web\.archive\.org/web/(\d{8})\d*[a-z_]*/(https?://.+)$")
+_WAYBACK = re.compile(r"^https?://web\.archive\.org/web/((\d{8})\d*)[a-z_]*/(https?://.+)$")
 
 
 def unwrap_wayback(url: str) -> str:
     """The original URL behind a Wayback snapshot link (links in an archived page point there)."""
     m = _WAYBACK.match(url)
-    return clean_url(m.group(2)) if m else url
+    return clean_url(m.group(3)) if m else url
 
 
 def capture_date(snapshot_url: str) -> str:
     m = _WAYBACK.match(snapshot_url)
     if not m:
         return ""
-    d = m.group(1)
+    d = m.group(2)
     return f"{d[:4]}-{d[4:6]}-{d[6:8]}"
 
 
-async def _archived(ctx: Context, kind: str, url: str, guessed: bool, why: str) -> SitePage:
-    """The newest Wayback capture (with status 200) of a page the live site refused to serve."""
+def capture_stamp(snapshot_url: str) -> str:
+    """The full Wayback timestamp of a snapshot URL ("" when it is not one)."""
+    m = _WAYBACK.match(snapshot_url)
+    return m.group(1) if m else ""
+
+
+async def _archived(
+    ctx: Context, kind: str, url: str, guessed: bool, why: str, at: str = ""
+) -> SitePage:
+    """A Wayback copy of a page the live site refused to serve: the capture closest to ``at``
+    (one request; Wayback redirects to it), or without ``at`` the newest capture with status
+    200 (a CDX lookup first)."""
     try:
-        rows = await ctx.fetcher.get_json(WAYBACK_NEWEST_OK.format(url=quote(url, safe="")))
-        stamps = [r[0] for r in rows[1:]] if isinstance(rows, list) else []
-        if not stamps:
-            return SitePage(kind=kind, url=url, error=f"{why}; no archived copy", guessed=guessed)
-        result = await ctx.fetcher.fetch_api(WAYBACK_SNAPSHOT.format(ts=stamps[-1], url=url))
+        stamp = at
+        if not stamp:
+            rows = await ctx.fetcher.get_json(WAYBACK_NEWEST_OK.format(url=quote(url, safe="")))
+            stamps = [r[0] for r in rows[1:]] if isinstance(rows, list) else []
+            if not stamps:
+                return SitePage(
+                    kind=kind, url=url, error=f"{why}; no archived copy", guessed=guessed
+                )
+            stamp = stamps[-1]
+        result = await ctx.fetcher.fetch_api(WAYBACK_SNAPSHOT.format(ts=stamp, url=url))
     except (FetchError, ValueError) as exc:
         return SitePage(kind=kind, url=url, error=f"{why}; archive: {exc}", guessed=guessed)
     date = capture_date(result.final_url)
@@ -189,10 +206,10 @@ async def _archived(ctx: Context, kind: str, url: str, guessed: bool, why: str) 
 
 
 async def _fetch(
-    ctx: Context, kind: str, url: str, guessed: bool = False, archive_only: bool = False
+    ctx: Context, kind: str, url: str, guessed: bool = False, archive_at: str = ""
 ) -> SitePage:
-    if archive_only:
-        return await _archived(ctx, kind, url, guessed, "homepage blocked")
+    if archive_at:  # the homepage was blocked: read this page from the archive only
+        return await _archived(ctx, kind, url, guessed, "homepage blocked", at=archive_at)
     try:
         result = await ctx.fetcher.get_text(url)
     except FetchStatusError as exc:
@@ -347,10 +364,17 @@ async def read_site(ctx: Context) -> SiteReport:
     base = ctx.url if archived else home.final_url or home.url
     links = [(unwrap_wayback(u), t) for u, t in extract_links(home.raw, home.final_url or home.url)]
     plan = plan_pages(base, links, ctx.domain)
-    if archived:  # the live site refuses us: read only the key pages, from the archive
-        plan = [(k, u, g) for k, u, g in plan if k in ARCHIVE_PAGE_KINDS]
+    stamp = capture_stamp(home.final_url) if archived else ""
+    if archived:  # the live site refuses us: one page per key kind, from the archive
+        kinds: set[str] = set()
+        key_pages: list[tuple[str, str, bool]] = []
+        for k, u, g in plan:
+            if k in ARCHIVE_PAGE_KINDS and k not in kinds:
+                kinds.add(k)
+                key_pages.append((k, u, g))
+        plan = key_pages
     others = await asyncio.gather(
-        *(_fetch(ctx, k, u, guessed, archive_only=archived) for k, u, guessed in plan)
+        *(_fetch(ctx, k, u, guessed, archive_at=stamp) for k, u, guessed in plan)
     )
     pages = [home, *others]
 

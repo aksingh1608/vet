@@ -4,7 +4,14 @@ import httpx
 
 from tests.conftest import FakeLLM
 from vet.collectors.base import Context
-from vet.site_reader import _ClaimOut, _ExtractOut, capture_date, read_site, unwrap_wayback
+from vet.site_reader import (
+    _ClaimOut,
+    _ExtractOut,
+    capture_date,
+    capture_stamp,
+    read_site,
+    unwrap_wayback,
+)
 
 TS = "20261020120000"
 SNAP = f"https://web.archive.org/web/{TS}/https://blocked.example/"
@@ -81,6 +88,9 @@ async def test_blocked_homepage_is_read_from_the_newest_archived_copy(router_fet
     # never for subpages once it has refused
     live = {r.url.path for r in rec.requests if r.url.host == "blocked.example"}
     assert live <= {"/", "/robots.txt"}
+    # one CDX lookup (the homepage); key pages go straight to the capture closest to it
+    cdx = [r for r in rec.requests if r.url.path.startswith("/cdx/")]
+    assert len(cdx) == 1
 
 
 def test_wayback_links_are_mapped_back_to_the_live_site() -> None:
@@ -89,3 +99,5 @@ def test_wayback_links_are_mapped_back_to_the_live_site() -> None:
     ) == ("https://blocked.example/impressum")
     assert unwrap_wayback("https://blocked.example/about") == "https://blocked.example/about"
     assert capture_date(SNAP) == "2026-10-20"
+    assert capture_stamp(SNAP) == TS
+    assert capture_stamp("https://blocked.example/") == ""
