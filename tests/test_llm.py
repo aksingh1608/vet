@@ -59,3 +59,28 @@ async def test_two_cut_off_answers_raise_llm_error_not_validation_error() -> Non
     llm, _ = _llm([_parse_error(), _parse_error()])
     with pytest.raises(LLMError, match="not valid JSON"):
         await llm.structured(kind="fast", system="s", user="u", output=_Out, step="classify")
+
+
+async def test_identical_calls_hit_the_cache_and_return_the_same_answer(tmp_path) -> None:
+    from vet.llm import LLMCache
+
+    messages = _Messages([_ok(["first"]), _ok(["second"])])
+    client = SimpleNamespace(messages=messages)
+    llm = LLM(Settings(), client=client, cache=LLMCache(tmp_path / "c.sqlite"))  # type: ignore[arg-type]
+    a = await llm.structured(kind="fast", system="s", user="u", output=_Out, step="x")
+    b = await llm.structured(kind="fast", system="s", user="u", output=_Out, step="x")
+    c = await llm.structured(kind="fast", system="s", user="other", output=_Out, step="x")
+    assert a.items == b.items == ["first"]  # the second identical call never reached the API
+    assert c.items == ["second"]  # a different input is a different call
+    assert len(messages.budgets) == 2
+
+
+async def test_failed_calls_are_not_cached(tmp_path) -> None:
+    from vet.llm import LLMCache
+
+    llm, messages = _llm([_parse_error(), _parse_error(), _ok(["later"])])
+    llm._cache = LLMCache(tmp_path / "c.sqlite")
+    with pytest.raises(LLMError):
+        await llm.structured(kind="fast", system="s", user="u", output=_Out, step="x")
+    out = await llm.structured(kind="fast", system="s", user="u", output=_Out, step="x")
+    assert out.items == ["later"]  # the failure was not remembered

@@ -82,7 +82,8 @@ from what did answer, and the error is shown in the `errors` column and the repo
 | Anthropic API errors | The judge falls back to the deterministic rules (confidence 0.3); the site reader cannot extract claims | Wait a minute and rerun the affected products with `--into` |
 | crt.sh slow or down | Optional: age continues with RDAP and Wayback | Nothing |
 | Wayback slow | age may time out (45 s); the other collectors still run | Rerun the product with `--into` |
-| A vendor site answers 403 or 429 | No claims from the site; records, search and breach checks still run (Personio answered 429 in the rehearsal) | Optionally rerun that product with `--into` a minute later |
+| A vendor site answers 403 or 429 | The homepage and key pages (legal, about, customers, pricing) are read from the newest Wayback capture with status 200; sources show the snapshot URL and "archived copy of <date>". No capture: no claims, but records, search and breach checks still run | Nothing; the `errors` column names the archived copy used |
+| A rerun must ask the model again (e.g. after a prompt change) | LLM answers are cached by exact input, so reruns are reproducible and free | `VET_LLM_CACHE=false uv run vet run ... --into runs/<id>` |
 | Log line `a chunk of N results failed` | The model refused or cut off one chunk of search results (seen once: a security report about the vendor); only that chunk is lost | Nothing; rerun the product with `--into` if it ends with fewer than 4 reasons |
 | Whole run too slow | Products past the budget are judged on what was collected | Raise `VET_PRODUCT_BUDGET_S` (default 180) or split `blind.txt` into two runs |
 

@@ -57,7 +57,7 @@ def classify(user: str) -> _Classified:
                 is_hard_flag=True,
                 topic="news",
                 statement="heise reports a 2024 data leak at Ledgerly",
-                quote="sind 2024 Kundendaten von 12.000 Firmen abgeflossen",
+                quote="Ledgerly sind 2024 Kundendaten von 12.000 Firmen abgeflossen",
             ),
             item(  # quote not in the result: dropped
                 G2,

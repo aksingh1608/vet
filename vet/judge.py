@@ -14,11 +14,16 @@
      the strongest, so a young domain is not three pieces of evidence;
    * "no" needs two independent negative signals (age counts as one); "do_not_trust" needs a
      red flag (a trust hard flag, a contradicted claim, or the hollow pattern);
+   * mid-age tier: 2 to 10 years of domain history + at least 3 strong independent positive
+     facts on 3 distinct sites + no hard flags or contradictions -> trust as for the floor;
    * a vendor younger than YOUNG_VENDOR_YEARS has no track record: trust at most "caution";
    * hollow pattern (records < 1 year old + founding year claimed far earlier + a checkable dead
      page or contradiction + no positive record or independent evidence) -> "no" and
      "do_not_trust". The absence of evidence only gates the pattern; it is never a reason;
-   * a corroborated shutdown ("discontinued" hard flag) -> real_alive "no".
+   * a corroborated shutdown ("discontinued" hard flag) -> real_alive "no";
+   * weak evidence (launch sites, link directories, paid PR wires, social media, activity the
+     vendor controls) never blocks the hollow pattern and never raises trust on its own: it
+     is left out of the independent sources and of the trust score.
 2. LLM judge: picks labels within the allowed set and ranks fact ids (reasons and findings).
    Reasons and findings are built in code from verified facts, so no source can be invented.
 """
@@ -32,6 +37,7 @@ from pydantic import BaseModel, Field
 
 from vet.llm import LLMError, StructuredLLM, load_prompt, untrusted
 from vet.schemas import Axis, Claim, ClaimCheck, Fact, Polarity, RealAlive, SourceKind, Trust
+from vet.sources import evidence_class
 from vet.text import registered_domain
 
 logger = logging.getLogger(__name__)
@@ -54,6 +60,7 @@ HOLLOW_MAX_YEARS = 1.0
 AGE_COLLECTOR = "age"
 CHECKABLE_HOLLOW_SIGNS = frozenset({"missing_page", "dead_help", "contradicted_claim"})
 TRUST_FLOOR_INDEPENDENT_SOURCES = 2
+MID_AGE_STRONG_SOURCES = 3  # strong positive facts on this many distinct sites (2-10 years)
 AGE_EVIDENCE_TOPICS = frozenset({"domain_registered", "first_capture", "first_certificate"})
 # Negatives that may lower trust below the floor.
 REAL_NEGATIVE_TOPICS = frozenset(
@@ -164,13 +171,28 @@ def history_years(facts: list[Fact], today: datetime) -> float:
 
 
 def independent_positive_sources(facts: list[Fact]) -> set[str]:
-    """Distinct sites with a positive record/independent fact, domain-age records excluded."""
+    """Distinct sites with a positive record/independent fact that is not weak evidence,
+    domain-age records excluded."""
     return {
         registered_domain(f.source_url)
         for f in facts
         if f.polarity == Polarity.POSITIVE
         and f.source_kind != SourceKind.VENDOR
         and f.collector not in ("age", *TIE_BREAK_COLLECTORS)
+        and evidence_class(f) != "weak"
+    }
+
+
+def strong_positive_sources(facts: list[Fact]) -> set[str]:
+    """Distinct sites with a strong (records, reputable press, customers, review platforms with a
+    real review count) positive fact that is not vendor-sourced, domain-age records excluded."""
+    return {
+        registered_domain(f.source_url)
+        for f in facts
+        if f.polarity == Polarity.POSITIVE
+        and f.source_kind != SourceKind.VENDOR
+        and f.collector not in ("age", *TIE_BREAK_COLLECTORS)
+        and evidence_class(f) == "strong"
     }
 
 
@@ -204,7 +226,9 @@ def apply_rules(
 
     ra_pos = _signal_sum(evidence, Axis.REAL_ALIVE, Polarity.POSITIVE)
     ra_neg = _signal_sum(scored, Axis.REAL_ALIVE, Polarity.NEGATIVE)
-    tr_pos = _sum(evidence, Axis.TRUST, Polarity.POSITIVE)
+    tr_pos = _sum(
+        [f for f in evidence if evidence_class(f) != "weak"], Axis.TRUST, Polarity.POSITIVE
+    )
     tr_neg = _sum(scored, Axis.TRUST, Polarity.NEGATIVE)
     ra_neg_count = _signal_count(scored, Axis.REAL_ALIVE, Polarity.NEGATIVE)
     # Breaches have their own rule (below); every other hard flag caps as before.
@@ -246,11 +270,25 @@ def apply_rules(
     sources = independent_positive_sources(eligible)
     old_ids = {f.id for f in breaches.old_disclosed}
     real_negatives = [f for f in counted if is_real_negative(f) and f.id not in old_ids]
+    contradicted = any(f.topic == "contradicted_claim" for f in counted)
+    strong = strong_positive_sources(eligible)
     floor_met = (
         not hard
         and years > TRUST_FLOOR_HISTORY_YEARS
         and len(sources) >= TRUST_FLOOR_INDEPENDENT_SOURCES
     )
+    mid_age_met = (
+        not hard
+        and not contradicted
+        and YOUNG_VENDOR_YEARS <= years <= TRUST_FLOOR_HISTORY_YEARS
+        and len(strong) >= MID_AGE_STRONG_SOURCES
+    )
+    basis = (
+        f"trust floor ({years:g} years, {len(sources)} independent sources)"
+        if floor_met
+        else f"mid-age tier ({years:g} years, {len(strong)} strong independent sources)"
+    )
+    floor_met = floor_met or mid_age_met
     finding_only: set[str] = set()
     if breaches.blocking or (breaches.old_disclosed and not floor_met):
         # Recent or undisclosed breach (or an old one without the floor): "caution", unless
@@ -271,18 +309,13 @@ def apply_rules(
         if real_negatives:
             allowed_tr = [Trust.CAUTION, Trust.TRUST]
             notes.append(
-                f"trust floor met ({years:g} years, {len(sources)} independent sources) but "
-                f"{len(real_negatives)} real negative(s): caution or trust"
+                f"{basis} met but {len(real_negatives)} real negative(s): caution or trust"
             )
         else:
             allowed_tr = [Trust.TRUST]
-            notes.append(
-                f"trust floor: {years:g} years of domain history, {len(sources)} independent "
-                f"sources, no hard flags or real negatives -> trust"
-            )
+            notes.append(f"{basis}: no hard flags or real negatives -> trust")
 
     # Red-flag gates, applied last so they override the softer rules above.
-    contradicted = any(f.topic == "contradicted_claim" for f in counted)
     hollow = is_hollow(eligible, years, sources)
     shutdown = [f for f in hard_ra if f.topic == "discontinued"]
     if hollow:
@@ -315,6 +348,8 @@ def apply_rules(
             "hard_flags": float(len(hard)),
             "history_years": years,
             "independent_sources": float(len(sources)),
+            "strong_sources": float(len(strong)),
+            "mid_age_tier": float(mid_age_met),
             "real_negatives": float(len(real_negatives)),
             "breaches_blocking": float(len(breaches.blocking)),
             "breaches_old_disclosed": float(len(breaches.old_disclosed)),

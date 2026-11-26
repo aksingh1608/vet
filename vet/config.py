@@ -104,6 +104,8 @@ class Settings(BaseModel):
     blocked_domains: tuple[str, ...] = SNIPPET_ONLY_DOMAINS
 
     tavily_advanced: bool = False
+    # Reuse cached LLM answers for identical inputs (the models take no temperature setting).
+    llm_cache: bool = True
     # A breach younger than this (or never disclosed by the vendor) makes trust "caution".
     breach_recent_years: int = DEFAULT_BREACH_RECENT_YEARS
 
@@ -163,6 +165,7 @@ class Settings(BaseModel):
             ("tavily_advanced", "VET_TAVILY_ADVANCED"),
             ("breach_recent_years", "VET_BREACH_RECENT_YEARS"),
             ("output_format", "VET_OUTPUT_FORMAT"),
+            ("llm_cache", "VET_LLM_CACHE"),
         ):
             raw = os.environ.get(var, "").strip()
             if raw:

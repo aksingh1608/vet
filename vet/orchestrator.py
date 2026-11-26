@@ -21,7 +21,7 @@ from vet.collectors.base import Collector, CollectorResult, Context, run_collect
 from vet.config import Settings
 from vet.fetch import Fetcher
 from vet.judge import judge, relabel_after_verification
-from vet.llm import LLM, StructuredLLM
+from vet.llm import LLM, LLMCache, StructuredLLM
 from vet.output import ProductRecord
 from vet.schemas import Verdict
 from vet.site_reader import SiteReport, read_site
@@ -219,7 +219,7 @@ async def run_many(
     urls: list[str], settings: Settings, git_sha: str, run_id: str | None = None
 ) -> tuple[str, list[ProductRecord], list[trace.Trace]]:
     run_id = run_id or new_run_id()
-    llm = LLM(settings)
+    llm = LLM(settings, cache=LLMCache(settings.cache_path) if settings.llm_cache else None)
     sem = asyncio.Semaphore(settings.max_parallel_products)
     async with Fetcher(settings) as fetcher:
         deps = Deps(

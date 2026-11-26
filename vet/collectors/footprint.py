@@ -17,7 +17,7 @@ from pydantic import BaseModel
 from vet.collectors.base import Context, fact_id
 from vet.collectors.classify import classify_in_chunks
 from vet.schemas import Axis, Fact, Polarity, SourceKind
-from vet.sources import review_statement, source_type_for
+from vet.sources import names_entity, review_statement, source_type_for
 from vet.tavily import TavilyResult
 from vet.text import contains_quote, same_site
 
@@ -70,6 +70,12 @@ def vendor_payload(ctx: Context) -> dict[str, str]:
         "legal_entity": ctx.identity.legal_entity,
         "country": ctx.identity.country,
     }
+
+
+def entity_names(ctx: Context) -> set[str]:
+    """Names that identify the product being judged (for entity matching of negatives)."""
+    names = {ctx.identity.vendor_name, ctx.identity.product_name, ctx.domain.split(".")[0]}
+    return {n for n in names if n}
 
 
 def search_name(ctx: Context) -> str:
@@ -132,6 +138,12 @@ async def collect(ctx: Context) -> list[Fact]:
             continue
         if not item.quote or not contains_quote(source.content, item.quote):
             continue
+        if (
+            item.polarity == Polarity.NEGATIVE
+            and item.topic != "reviews"
+            and not names_entity(item.quote, ctx.domain, entity_names(ctx))
+        ):
+            continue  # a negative about a sister brand, a parent or a namesake
         weight, hard, filler = calibrate(item)
         topic = item.topic if item.topic in TOPICS else "other"
         # Review counts and ratings are written as data by our code; the quote stays evidence.

@@ -302,7 +302,7 @@ def test_finding_only_breach_becomes_the_trust_reason_when_nothing_else_covers_t
     reason = breach_reason(only, facts, set(facts))
     assert reason is not None and reason.fact_id == "risk-0"  # the record, not the notice
     assert reason.text.endswith("; the vendor disclosed it (x.example)")
-    reasons, notes = select_reasons(ranked, set(facts), "x.example", only, reason)
+    reasons, notes = select_reasons(ranked, set(facts), "x.example", only, [reason])
     assert reasons[-1].fact_id == "risk-0" and reasons[-1].axis == Axis.TRUST
     assert any("used as the trust reason" in n for n in notes)
 
@@ -317,3 +317,111 @@ def test_finding_only_breach_becomes_the_trust_reason_when_nothing_else_covers_t
     assert {"risk-0", "risk-11"} <= used
     findings, _ = select_findings(["risk-0", "risk-11"], facts, set(facts), used)
     assert not {"risk-0", "risk-11"} & {f.fact_id for f in findings}
+
+
+def test_two_reports_of_the_same_event_are_one_reason() -> None:
+    from datetime import UTC, datetime
+
+    when = datetime(2019, 5, 24, tzinfo=UTC)
+    record = neg("risk-0", "risk", "breach", "https://haveibeenpwned.com/PwnedWebsites#X",
+                 source_kind=SourceKind.RECORD, observed_at=when)  # fmt: skip
+    page = neg("risk-10", "risk", "breach", "https://haveibeenpwned.com/Breach/X",
+               source_kind=SourceKind.RECORD, observed_at=when.replace(month=1, day=1))  # fmt: skip
+    ranked = [record, page, *age_facts(), fact("fp-0", "footprint")]  # 3 collectors: relaxed
+    reasons, _ = select_reasons(ranked, {f.id for f in ranked}, "x.example")
+    assert [r.fact_id for r in reasons].count("risk-10") == 0
+
+
+# ---- trust reason fallback chain ------------------------------------------------------------
+
+
+def personio_shaped() -> list[Fact]:
+    """The live Personio run: 11 years of records and independent coverage, but every fact is
+    on the real_alive axis, so no trust fact exists for axis coverage."""
+    reg = datetime(2015, 9, 18, tzinfo=UTC)
+    return [
+        fact("age-0", "age", topic="first_capture", observed_at=reg, quote="",
+             source_url="https://web.archive.org/web/20150918012512/personio.de/",
+             source_kind=SourceKind.RECORD),
+        fact("age-1", "age", topic="first_certificate",
+             observed_at=datetime(2015, 9, 23, tzinfo=UTC),
+             source_url="https://crt.sh/?q=personio.de", source_kind=SourceKind.RECORD),
+        fact("fp-0", "footprint", polarity=Polarity.NEUTRAL, topic="other", source_type="other",
+             source_url="https://en.wikipedia.org/wiki/Personio"),
+        fact("fp-1", "footprint", polarity=Polarity.NEUTRAL, topic="news", source_type="press",
+             source_url="https://www.siliconrepublic.com/start-ups/personio-acquisition-back"),
+        fact("fp-2", "footprint", topic="reviews", source_type="review", weight=0.3,
+             source_url="https://www.softwareadvice.com/hr/personio-profile/reviews",
+             quote="Personio keeps developing its software and adding new functions"),
+        fact("fp-3", "footprint", topic="reviews", source_type="review", weight=0.2,
+             statement="Trustpilot: 89 reviews", code_worded=True,
+             source_url="https://www.trustpilot.com/review/personio.de",
+             quote="89 reviews • Great"),
+    ]  # fmt: skip
+
+
+def chain_reasons(facts: list[Fact]) -> tuple[list, list[str]]:  # type: ignore[type-arg]
+    from vet.verify import trust_reason_chain
+
+    passed = {f.id for f in facts}
+    chain = trust_reason_chain({f.id: f for f in facts}, passed)
+    return select_reasons(facts, passed, "personio.de", frozenset(), chain)
+
+
+def test_personio_shape_gets_a_trust_reason_from_the_review_platform() -> None:
+    reasons, notes = chain_reasons(personio_shaped())
+    trust = [r for r in reasons if r.axis == Axis.TRUST]
+    assert len(trust) == 1
+    assert trust[0].text == "Trustpilot: 89 reviews"
+    assert trust[0].source_url == "https://www.trustpilot.com/review/personio.de"
+    assert any("used as the trust reason" in n for n in notes)
+
+
+def test_register_record_comes_before_review_platform() -> None:
+    register = fact("legal-0", "legal_id", topic="register", source_kind=SourceKind.RECORD,
+                    statement="Handelsregister: Personio SE & Co. KG, HRA 112345",
+                    source_url="https://www.northdata.de/Personio")  # fmt: skip
+    reasons, _ = chain_reasons([*personio_shaped(), register])
+    (trust,) = [r for r in reasons if r.axis == Axis.TRUST]
+    assert trust.fact_id == "legal-0"
+
+
+def test_press_mention_when_no_register_or_counted_reviews() -> None:
+    facts = [f for f in personio_shaped() if f.id != "fp-3"]
+    reasons, _ = chain_reasons(facts)
+    (trust,) = [r for r in reasons if r.axis == Axis.TRUST]
+    assert trust.fact_id == "fp-1"
+
+
+def test_evidence_floor_sentence_when_nothing_else_exists() -> None:
+    facts = [*age_facts()[:3]]
+    reasons, _ = chain_reasons(facts)
+    (trust,) = [r for r in reasons if r.axis == Axis.TRUST]
+    assert trust.text.startswith("Evidence behind the trust call: 32.3 years of domain history")
+    assert "(since 1994-07-30)" in trust.text and "no hard flags or contradictions" in trust.text
+    assert trust.source_url == "https://lookup.icann.org/en/lookup?name=basecamp.com"
+    assert trust.polarity == Polarity.NEUTRAL
+
+
+def test_negative_or_unverified_facts_are_never_trust_fallbacks() -> None:
+    from vet.verify import trust_reason_chain
+
+    facts = personio_shaped()
+    facts[-1] = facts[-1].model_copy(update={"polarity": Polarity.NEGATIVE})
+    by_id = {f.id: f for f in facts}
+    chain = trust_reason_chain(by_id, {f.id for f in facts} - {"fp-1"})
+    assert [r.fact_id for r in chain] == ["age-0"]  # floor only, linked to the first capture
+
+
+def test_evidence_floor_dates_from_real_records_not_the_yearly_capture_history() -> None:
+    reg = datetime(2025, 11, 22, tzinfo=UTC)
+    facts = [
+        fact("age-0", "age", topic="domain_registered", observed_at=reg,
+             source_url="https://lookup.icann.org/en/lookup?name=x.example",
+             source_kind=SourceKind.RECORD, fetched_at=datetime(2026, 11, 22, tzinfo=UTC)),
+        fact("age-3", "age", topic="capture_history", observed_at=datetime(2025, 1, 1, tzinfo=UTC),
+             source_kind=SourceKind.RECORD, fetched_at=datetime(2026, 11, 22, tzinfo=UTC)),
+    ]  # fmt: skip
+    reasons, _ = chain_reasons(facts)
+    (trust,) = [r for r in reasons if r.axis == Axis.TRUST]
+    assert "1 year of domain history (since 2025-11-22)" in trust.text

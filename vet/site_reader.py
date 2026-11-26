@@ -2,6 +2,13 @@
 (copyright year, missing pages). The guard scans every page for text addressed to AI systems
 and strips it, with hidden text and comments, before anything reaches the LLM.
 
+Blocked pages (HTTP 403 or 429): the homepage and the key pages (legal, about, customers,
+pricing; one each) are read from the Wayback Machine instead: the homepage from its newest
+capture with status 200, the key pages from the capture closest to it (one request each, to
+stay inside the Wayback rate limit). The source of every claim and fact from such a page is
+the snapshot URL, and fact statements say "archived copy of <date>". A missing capture is not
+a dead page, so archived pages never yield 404 facts.
+
 Everything here is VENDOR-sourced. Claims are things to check; site facts can only count
 against the vendor, never for it.
 """
@@ -10,7 +17,7 @@ import asyncio
 import logging
 import re
 from datetime import UTC, datetime
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 from pydantic import BaseModel, Field
 
@@ -129,10 +136,85 @@ def llm_text(raw: str, url: str) -> str:
     return guard.scrub_text(extract_main_text(clean, url) or html_to_text(clean))
 
 
-async def _fetch(ctx: Context, kind: str, url: str, guessed: bool = False) -> SitePage:
+BLOCKED_STATUSES = frozenset({403, 429})
+ARCHIVE_PAGE_KINDS = frozenset({"home", "legal", "about", "customers", "pricing"})
+# Newest capture that was a real page: Wayback replays the captured status, and a site that
+# blocks us often blocked the archive crawler too (its newest captures are 403/429 pages).
+WAYBACK_NEWEST_OK = (
+    "https://web.archive.org/cdx/search/cdx?url={url}&output=json&fl=timestamp"
+    "&filter=statuscode:200&limit=-1"
+)
+WAYBACK_SNAPSHOT = "https://web.archive.org/web/{ts}/{url}"
+_WAYBACK = re.compile(r"^https?://web\.archive\.org/web/((\d{8})\d*)[a-z_]*/(https?://.+)$")
+
+
+def unwrap_wayback(url: str) -> str:
+    """The original URL behind a Wayback snapshot link (links in an archived page point there)."""
+    m = _WAYBACK.match(url)
+    return clean_url(m.group(3)) if m else url
+
+
+def capture_date(snapshot_url: str) -> str:
+    m = _WAYBACK.match(snapshot_url)
+    if not m:
+        return ""
+    d = m.group(2)
+    return f"{d[:4]}-{d[4:6]}-{d[6:8]}"
+
+
+def capture_stamp(snapshot_url: str) -> str:
+    """The full Wayback timestamp of a snapshot URL ("" when it is not one)."""
+    m = _WAYBACK.match(snapshot_url)
+    return m.group(1) if m else ""
+
+
+async def _archived(
+    ctx: Context, kind: str, url: str, guessed: bool, why: str, at: str = ""
+) -> SitePage:
+    """A Wayback copy of a page the live site refused to serve: the capture closest to ``at``
+    (one request; Wayback redirects to it), or without ``at`` the newest capture with status
+    200 (a CDX lookup first)."""
+    try:
+        stamp = at
+        if not stamp:
+            rows = await ctx.fetcher.get_json(WAYBACK_NEWEST_OK.format(url=quote(url, safe="")))
+            stamps = [r[0] for r in rows[1:]] if isinstance(rows, list) else []
+            if not stamps:
+                return SitePage(
+                    kind=kind, url=url, error=f"{why}; no archived copy", guessed=guessed
+                )
+            stamp = stamps[-1]
+        result = await ctx.fetcher.fetch_api(WAYBACK_SNAPSHOT.format(ts=stamp, url=url))
+    except (FetchError, ValueError) as exc:
+        return SitePage(kind=kind, url=url, error=f"{why}; archive: {exc}", guessed=guessed)
+    date = capture_date(result.final_url)
+    if not result.ok or not date:
+        return SitePage(
+            kind=kind, url=url, error=f"{why}; no archived copy ({result.status})", guessed=guessed
+        )
+    text = await asyncio.to_thread(llm_text, result.text, result.final_url)
+    return SitePage(
+        kind=kind,
+        url=url,
+        final_url=result.final_url,
+        status=result.status,
+        text=text,
+        raw=result.text,
+        guessed=guessed,
+        archived=date,
+    )
+
+
+async def _fetch(
+    ctx: Context, kind: str, url: str, guessed: bool = False, archive_at: str = ""
+) -> SitePage:
+    if archive_at:  # the homepage was blocked: read this page from the archive only
+        return await _archived(ctx, kind, url, guessed, "homepage blocked", at=archive_at)
     try:
         result = await ctx.fetcher.get_text(url)
     except FetchStatusError as exc:
+        if exc.status in BLOCKED_STATUSES and kind in ARCHIVE_PAGE_KINDS:
+            return await _archived(ctx, kind, url, guessed, f"HTTP {exc.status}")
         return SitePage(kind=kind, url=url, status=exc.status, error=str(exc), guessed=guessed)
     except FetchError as exc:
         return SitePage(kind=kind, url=url, error=str(exc), guessed=guessed)
@@ -146,6 +228,17 @@ async def _fetch(ctx: Context, kind: str, url: str, guessed: bool = False) -> Si
         raw=result.text,
         guessed=guessed,
     )
+
+
+def label_archived(facts: list[Fact], pages: list[SitePage]) -> list[Fact]:
+    """Say in the statement when a fact comes from an archived copy."""
+    dates = {p.final_url: p.archived for p in pages if p.archived}
+    labelled: list[Fact] = []
+    for f in facts:
+        date = dates.get(f.source_url)
+        statement = f"{f.statement} (archived copy of {date})" if date else f.statement
+        labelled.append(f.model_copy(update={"statement": statement}) if date else f)
+    return labelled
 
 
 def copyright_fact(home: SitePage, n: int, today: datetime) -> Fact | None:
@@ -191,7 +284,7 @@ def missing_page_facts(pages: list[SitePage], start: int, today: datetime) -> li
     """Linked pages that return 404/410. Computed facts with no quote (not reason material)."""
     facts: list[Fact] = []
     for page in pages:
-        if page.status in (404, 410) and not page.guessed:
+        if page.status in (404, 410) and not page.guessed and not page.archived:
             facts.append(
                 Fact(
                     id=fact_id("site", start + len(facts)),
@@ -267,9 +360,22 @@ async def read_site(ctx: Context) -> SiteReport:
     home = await _fetch(ctx, "home", ctx.url)
     if not home.raw:
         raise FetchError(f"homepage unreadable: {home.error or home.status}")
-    links = extract_links(home.raw, home.final_url or home.url)
-    plan = plan_pages(home.final_url or home.url, links, ctx.domain)
-    others = await asyncio.gather(*(_fetch(ctx, k, u, guessed) for k, u, guessed in plan))
+    archived = bool(home.archived)
+    base = ctx.url if archived else home.final_url or home.url
+    links = [(unwrap_wayback(u), t) for u, t in extract_links(home.raw, home.final_url or home.url)]
+    plan = plan_pages(base, links, ctx.domain)
+    stamp = capture_stamp(home.final_url) if archived else ""
+    if archived:  # the live site refuses us: one page per key kind, from the archive
+        kinds: set[str] = set()
+        key_pages: list[tuple[str, str, bool]] = []
+        for k, u, g in plan:
+            if k in ARCHIVE_PAGE_KINDS and k not in kinds:
+                kinds.add(k)
+                key_pages.append((k, u, g))
+        plan = key_pages
+    others = await asyncio.gather(
+        *(_fetch(ctx, k, u, guessed, archive_at=stamp) for k, u, guessed in plan)
+    )
     pages = [home, *others]
 
     facts: list[Fact] = []
@@ -278,6 +384,7 @@ async def read_site(ctx: Context) -> SiteReport:
         facts.append(cf)
     facts += missing_page_facts(others, len(facts) + 1, today)
     facts += injection_facts(pages, today)
+    facts = label_archived(facts, pages)
 
     readable = [p for p in pages if p.text]
     out = await ctx.llm.structured(
@@ -297,6 +404,11 @@ async def read_site(ctx: Context) -> SiteReport:
         country=out.country.upper()[:2],
     )
     errors = [f"{p.kind} {p.url}: {p.error}" for p in pages if p.error and not p.guessed]
+    errors += [
+        f"{p.kind} {p.url}: blocked; read the archived copy of {p.archived} ({p.final_url})"
+        for p in pages
+        if p.archived
+    ]
     logger.info(
         "site %s: %d pages, %d claims (%d dropped)", ctx.domain, len(readable), len(claims), dropped
     )
