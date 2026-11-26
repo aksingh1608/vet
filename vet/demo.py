@@ -1,8 +1,8 @@
 """`vet demo`: one product with live progress in the terminal, then a verdict panel.
 
-Display only. The live run is the normal pipeline (``run_many`` + ``write_run`` + report);
-progress comes from the trace events the pipeline already emits. A replay reads a saved
-run directory and makes no network calls.
+Display only. The live run is the normal pipeline (``run_many``); the CLI then writes,
+validates and reports it the same way ``vet run`` does. Progress comes from the trace events
+the pipeline already emits. A replay reads a saved run directory and makes no network calls.
 """
 
 import asyncio
@@ -22,7 +22,7 @@ from rich.text import Text
 from vet import trace
 from vet.config import Settings
 from vet.orchestrator import AFTER_SITE, normalize_url, run_many
-from vet.output import TRACE_FILE, ProductRecord, product_slug, write_run
+from vet.output import TRACE_FILE, ProductRecord, product_slug
 from vet.report import safe_url
 from vet.schemas import Polarity, RealAlive, Trust
 
@@ -216,11 +216,9 @@ def replay(record: ProductRecord, console: Console, run_dir: Path) -> None:
 
 
 def run_live(
-    url: str, settings: Settings, git_sha: str, console: Console, report_dir: str
-) -> tuple[ProductRecord, Path]:
+    url: str, settings: Settings, git_sha: str, console: Console
+) -> tuple[str, list[ProductRecord], list[trace.Trace]]:
     """Run the normal pipeline on one product, showing collector progress as it happens."""
-    from vet.report import render
-
     progress = Progress()
     token = trace.set_listener(progress.handle)
     try:
@@ -229,8 +227,4 @@ def run_live(
             progress.finish(records[0])
     finally:
         trace.reset_listener(token)
-    run_dir = settings.runs_dir / run_id
-    write_run(run_dir, records, traces, settings)
-    render(run_dir, run_dir / report_dir)
-    console.print(verdict_panel(records[0]))
-    return records[0], run_dir
+    return run_id, records, traces

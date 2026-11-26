@@ -3,7 +3,7 @@
 Sources: the repo, the tests, `runs/`, `findings.md` and the commit history. Nothing else.
 
 ## Numbers
-- **Tests:** 259, all passing (`uv run pytest`). Unit tests use no network.
+- **Tests:** 272, all passing (`uv run pytest`). Unit tests use no network.
 - **6 collectors:**
   - `age`: when the domain appeared (RDAP registration, first certificate on crt.sh, Wayback history). No LLM.
   - `legal_id`: whether the legal entity named on the site is in a company register (Companies House for UK; North Data via search snippets for everyone else).
@@ -64,7 +64,19 @@ Sources: the repo, the tests, `runs/`, `findings.md` and the commit history. Not
   - `py-perf-double-lookup` (LOW), `vet/verify.py`. Two dictionary lookups became one `by_id.get(fid)`.
   - `fa-mnt-no-typing-param` (MEDIUM), `vet/config.py`. A pydantic validator was replaced with a `Literal["json", "csv"]` field type, with the same behaviour.
   - `py-maint-else-after-return` (HIGH), `vet/collectors/classify.py`. A redundant `else` after `raise` was restructured with an early `continue`.
-- **The Norma GitHub App checked PRs #2, #3, #4, #5, #6 and #7.** Each check said "No issues introduced by your changes."
+- **The Norma GitHub App checked PRs #2 to #10.** Each check said "No issues introduced by your changes."
+- **Full `live_check` sweep of `main` after PR #10:** 57 Python files, 0 issues. Three config files are `not_checkable`; `uv.lock` was not sent.
+- **TODO:** the Norma dashboard full scan, which includes the LLM-based rules.
+
+## Two authors
+- **Saurabh Kumar** (with Claude Code) wrote `vet demo` (PR #10):
+  - Live progress per collector, then a verdict panel.
+  - `--from-run` replays a saved run with no network.
+  - 9 offline tests.
+  - His `live_check` was refused (`remote_not_matched`), so his files were checked from Aryan's session afterwards. All clean.
+- **Author conflict, found in review:** `vet demo` wrote and rendered the run but never called `validate_verdict_file`, unlike `vet run`.
+  - Resolution: PR #10 was merged as written. A follow-up added one shared write → validate → render function for both commands, plus a test that `vet demo` reports the same validation problems as `vet run`.
+  - Logged under "Author conflicts" in `findings.md`, and in `DEFENCE.md`.
 
 ## Claims vs records: three reasons from our test products
 - None of our 11 test products had a founding-year claim contradicted by records (0 contradicted claim checks in `runs/`). That case is covered only by the hollow-vendor scenario test.
