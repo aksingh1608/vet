@@ -166,40 +166,98 @@ def test_unverified_facts_are_never_reasons() -> None:
     assert set(ids(reasons)) == {"age-2", "fp-0"}
 
 
-def test_findings_are_verified_linked_and_not_single_source_rumours() -> None:
-    rumour = fact(
-        "fp-7",
-        "footprint",
-        Axis.TRUST,
-        polarity=Polarity.NEGATIVE,
-        topic="layoffs",
-        source_url="https://www.linkedin.com/posts/someone",
+def neg(fid: str, collector: str, topic: str, url: str, **kw: object) -> Fact:
+    return fact(
+        fid, collector, Axis.TRUST, polarity=Polarity.NEGATIVE, topic=topic, source_url=url, **kw
     )
-    breach_a = fact(
-        "risk-10",
-        "risk",
-        Axis.TRUST,
-        polarity=Polarity.NEGATIVE,
-        topic="breach",
-        source_url="https://heise.de/a",
-    )
-    breach_b = breach_a.model_copy(
-        update={"id": "risk-11", "source_url": "https://www.theregister.com/b"}
-    )
-    hibp = fact(
-        "risk-0",
-        "risk",
-        Axis.TRUST,
-        polarity=Polarity.NEGATIVE,
-        topic="breach",
+
+
+def test_one_source_is_enough_only_for_records_press_and_vendor_negatives() -> None:
+    hibp = neg(
+        "risk-0", "risk", "breach", "https://haveibeenpwned.com/PwnedWebsites#X",
         source_kind=SourceKind.RECORD,
-        source_url="https://haveibeenpwned.com/PwnedWebsites#X",
-    )
-    unverified = fact("risk-12", "risk", Axis.TRUST, polarity=Polarity.NEGATIVE, topic="lawsuit")
-    facts = {f.id: f for f in (rumour, breach_a, breach_b, hibp, unverified)}
-    passed = {"fp-7", "risk-10", "risk-11", "risk-0"}
-    findings, notes = select_findings(["fp-7", "risk-0", "risk-10", "risk-12"], facts, passed)
-    assert [f.fact_id for f in findings] == ["risk-0", "risk-10"]
+    )  # fmt: skip
+    press = neg("risk-10", "risk", "lawsuit", "https://www.reuters.com/a", source_type="press")
+    shutdown = neg(
+        "risk-11", "risk", "discontinued", "https://x.example/goodbye",
+        source_kind=SourceKind.VENDOR, source_type="vendor",
+    )  # fmt: skip
+    linkedin = neg("fp-7", "footprint", "layoffs", "https://www.linkedin.com/posts/a",
+                   source_type="social")  # fmt: skip
+    blog = neg("fp-8", "footprint", "fine", "https://someblog.example/x", source_type="blog")
+    blog_too = neg("risk-12", "risk", "unconfirmed_fine", "https://other.example/y",
+                   source_type="blog")  # fmt: skip
+    unverified = neg("risk-13", "risk", "insolvency", "https://www.ft.com/z", source_type="press")
+    facts = {f.id: f for f in (hibp, press, shutdown, linkedin, blog, blog_too, unverified)}
+    passed = set(facts) - {"risk-13"}
+    findings, notes = select_findings(list(facts), facts, passed)
+    kept = [f.fact_id for f in findings]
+    assert kept[:3] == ["risk-0", "risk-10", "risk-11"]  # record, press, vendor's own notice
+    assert "fp-7" not in kept  # a social post alone is never a finding
+    assert {"fp-8", "risk-12"} <= set(kept)  # two blogs on the same topic corroborate
     assert all(f.source_url.startswith("https://") for f in findings)
-    assert any("single-source" in n for n in notes)
-    assert any("risk-12" in n for n in notes)
+    assert any("fp-7" in n and "second independent source" in n for n in notes)
+    assert any("risk-13" in n for n in notes)  # not verified
+
+
+def test_findings_never_repeat_a_reason() -> None:
+    contradiction = neg(
+        "claims_check-0", "claims_check", "contradicted_claim", "https://x.example/about",
+        source_kind=SourceKind.VENDOR,
+    )  # fmt: skip
+    other = neg(
+        "claims_check-1", "claims_check", "founding_year_gap", "https://x.example/team",
+        source_kind=SourceKind.VENDOR,
+    )  # fmt: skip
+    facts = {f.id: f for f in (contradiction, other)}
+    findings, _ = select_findings(list(facts), facts, set(facts), frozenset({"claims_check-0"}))
+    assert [f.fact_id for f in findings] == ["claims_check-1"]
+
+
+def test_finding_only_facts_are_never_reasons() -> None:
+    old_breach = neg("risk-0", "risk", "breach", "https://haveibeenpwned.com/PwnedWebsites#X",
+                     source_kind=SourceKind.RECORD)  # fmt: skip
+    ranked = [old_breach, *age_facts(), fact("fp-0", "footprint"), fact("legal-0", "legal_id")]
+    reasons, _ = select_reasons(ranked, {f.id for f in ranked}, "x.example", frozenset({"risk-0"}))
+    assert "risk-0" not in ids(reasons)
+
+
+def test_finding_only_facts_are_still_verified() -> None:
+    from vet.verify import candidate_pool
+
+    old_breach = neg("risk-0", "risk", "breach", "https://haveibeenpwned.com/PwnedWebsites#X",
+                     source_kind=SourceKind.RECORD)  # fmt: skip
+    ranked = [*age_facts(), fact("fp-0", "footprint")]  # the reason ranking leaves it out
+    everything = {f.id: f for f in [*ranked, old_breach]}
+    pool = candidate_pool(ranked, ["risk-0"], 24, everything)
+    assert "risk-0" in {f.id for f in pool}
+
+
+def test_two_reports_of_the_same_event_are_one_finding() -> None:
+    from datetime import UTC, datetime
+
+    when = datetime(2019, 5, 24, tzinfo=UTC)
+    hibp = neg("risk-0", "risk", "breach", "https://haveibeenpwned.com/PwnedWebsites#X",
+               source_kind=SourceKind.RECORD, observed_at=when)  # fmt: skip
+    notice = neg(
+        "risk-11",
+        "risk",
+        "breach",
+        "https://x.example/incident",
+        source_kind=SourceKind.VENDOR,
+        observed_at=when.replace(month=1, day=1),
+    )
+    facts = {f.id: f for f in (hibp, notice)}
+    findings, notes = select_findings(list(facts), facts, set(facts))
+    assert [f.fact_id for f in findings] == ["risk-0"]
+    assert any("same event" in n for n in notes)
+
+
+def test_record_publishers_and_social_sites_are_typed_by_domain() -> None:
+    from vet.sources import source_type_for
+
+    assert source_type_for("https://haveibeenpwned.com/Breach/Canva", "other") == "record"
+    assert source_type_for("https://www.northdata.de/X", "") == "record"
+    assert source_type_for("https://www.youtube.com/watch?v=1", "press") == "social"
+    assert source_type_for("https://www.reuters.com/a", "press") == "press"
+    assert source_type_for("https://www.reuters.com/a", "nonsense") == "other"

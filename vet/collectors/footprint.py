@@ -19,6 +19,7 @@ from vet import guard
 from vet.collectors.base import Context, fact_id
 from vet.llm import load_prompt, untrusted
 from vet.schemas import Axis, Fact, Polarity, SourceKind
+from vet.sources import review_statement, source_type_for
 from vet.tavily import TavilyResult
 from vet.text import contains_quote, same_site, truncate
 
@@ -50,6 +51,7 @@ class _Item(BaseModel):
     relevant: bool
     independent: bool
     topic: str
+    source_type: str
     quote: str
     statement: str
     axis: Axis
@@ -138,11 +140,16 @@ async def collect(ctx: Context) -> list[Fact]:
         if not item.quote or not contains_quote(source.content, item.quote):
             continue
         weight, hard, filler = calibrate(item)
+        topic = item.topic if item.topic in TOPICS else "other"
+        # Review counts and ratings are written as data by our code; the quote stays evidence.
+        data = review_statement(item.url, item.quote) if topic == "reviews" else ""
         facts.append(
             Fact(
                 id=fact_id(NAME, len(facts)),
                 collector=NAME,
-                statement=item.statement,
+                statement=data or item.statement,
+                code_worded=bool(data),
+                source_type=source_type_for(item.url, item.source_type),
                 axis=item.axis,
                 polarity=item.polarity,
                 weight=weight,
@@ -151,7 +158,7 @@ async def collect(ctx: Context) -> list[Fact]:
                 source_kind=SourceKind.INDEPENDENT,
                 fetched_at=today,
                 is_hard_flag=hard,
-                topic=item.topic if item.topic in TOPICS else "other",
+                topic=topic,
                 is_filler=filler,
             )
         )
