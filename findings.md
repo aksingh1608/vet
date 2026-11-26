@@ -25,6 +25,8 @@ Nothing else goes in this section. DEFENCE.md cites only this section.
 | 2026-11-26 | feat/phase-4c-hardening | `live_check` | — | vet/judge.py, vet/verify.py (mid-age trust tier, trust reason fallback chain) | — | clean | 0 issues. New tests left to the Norma GitHub App check on PR #6. |
 | 2026-11-26 | fix/recall-and-stability | `live_check` (python, secrets, fastapi, sqlalchemy rulesets) | — | vet/collectors/footprint.py, risk.py, alive.py, vet/sources.py, verify.py, config.py, orchestrator.py | — | clean | 0 issues. `.env.example` not sent (`not_checkable` before). Changed/new tests left to the Norma GitHub App check on the PR. |
 | 2026-11-26 | fix/recall-and-stability | `live_check` | — | vet/judge.py, vet/config.py, vet/orchestrator.py, vet/collectors/footprint.py, vet/collectors/risk.py (labels decided in code, weights set in code) | — | clean | 0 issues. Tests left to the Norma GitHub App check on the PR. |
+| 2026-11-26 | feat/phase-4c-hardening (PR #6) | Norma GitHub App PR check | — | files changed by PR #6 | — | clean | "No issues introduced by your changes." [Report](https://norma.qualityclouds.com/projects/12410) |
+| 2026-11-26 | fix/recall-and-stability (PR #7) | Norma GitHub App PR check | — | files changed by PR #7 | — | clean | "No issues introduced by your changes." [Report](https://norma.qualityclouds.com/projects/12410) |
 
 ## Self-review notes (not Norma findings)
 
