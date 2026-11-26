@@ -28,6 +28,8 @@ uv run vet run https://example.com                  # verdict file + report in r
 uv run vet run --file urls.txt --advanced           # up to 5 in parallel, Tavily advanced
 uv run vet run https://x.example --into runs/<id>   # rerun one product inside a run
 uv run vet run --file urls.txt --format csv         # JSON (default) or CSV verdict file
+uv run vet demo https://example.com                 # one product, live progress + verdict panel
+uv run vet demo --from-run runs/<id>                # replay a saved run, no network
 uv run vet validate runs/<id>                       # check the verdict file (JSON or CSV)
 uv run vet report runs/<id>                         # static HTML into site/ (--public guard)
 uv run vet eval                                     # labelled sets -> runs/<id>/eval.md
