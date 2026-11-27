@@ -2,12 +2,26 @@
 
 The rules the team agrees to treat as blocking for `vet`. Rule ids are copied from Norma's
 `get_rulesets` / `get_rules_for_ruleset` output for this repository (status `linked`, repo id 12410).
-The org-scoped `Policies` ruleset currently holds 0 rules; this file is the proposal for it.
+The org-scoped `Policies` ruleset held 0 rules in the morning; by the afternoon it held the two
+organisation policies below.
 
 Scope: all 63 rules of `python-norma-ruleset` (both pages) and all 13 rules of
 `secrets-norma-ruleset` were read. Page 2 was reviewed later the same day; the code complied
 with every rule added below when they were added (the sqlite `execute()` calls use constant
 SQL with bound `?` parameters; the one `subprocess.run` call has `timeout=GIT_TIMEOUT_S`).
+
+## Organisation policies (Norma workspace "Vet", created 27 Nov)
+Two policies, which Norma turns into rules in the org-scoped "Policies" ruleset and checks on
+every dependency manifest and lockfile:
+
+| Policy | Rule id | Severity | What it says | Why we agree |
+|---|---|---|---|---|
+| No second HTTP client, no browser automation (Banned packages) | `policy-banned-deps-a5f2-1.0` | HIGH | Bans `requests`, `aiohttp`, `playwright`, `selenium`, directly or as a sub-dependency. | Every network call goes through `vet/fetch.py`, which enforces robots.txt, rate limits and the cache; a second HTTP client would bypass all three. vet is read-only and never renders pages, fills forms or logs in, so browser automation has no place. Banning `requests` and `aiohttp` came from Saurabh's review. |
+| Permissive licences only (Licence policy) | `policy-licence-a9e3-1.0` | MEDIUM | Allows MIT, BSD-2-Clause, BSD-3-Clause, Apache-2.0, PSF-2.0, ISC. | Keeps the dependency tree free of licence obligations we cannot review in a hackathon. Dry run: 0 violations. |
+
+First finding: the banned-packages policy flagged the unused optional extra
+`browser = ["playwright>=1.45"]` in pyproject.toml (score 96, 1 High). It was removed the same
+day (see findings.md).
 
 ## Blocking (fix before merge)
 

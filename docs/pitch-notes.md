@@ -149,3 +149,7 @@ many Greens kept as the baseline, no Green called Red. Option (b) misses the Gre
 check in the offline recomputation uses the vendor identity and the two-axis "real" call in
 place of the model's own identifiable/operating answers, which are not saved.
 0 of 79 product runs failed today.
+
+**The categoriser stays off for the blind round.** A live rehearsal with it switched on, on
+three products the agent had not seen, gave 2 wrong Reds out of 3, and one product took 134 s
+(over our 120 s limit).

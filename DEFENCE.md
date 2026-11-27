@@ -3,9 +3,21 @@
 ## Policy and consistency
 The policy: [docs/norma-policy.md](docs/norma-policy.md), the rules we treat as blocking (13) and
 advisory (4), each a rule id copied from Norma's `get_rules_for_ruleset` for this repository
-(python-norma-ruleset, secrets-norma-ruleset; the org-scoped "Policies" ruleset held 0 rules).
+(python-norma-ruleset, secrets-norma-ruleset; the org-scoped "Policies" ruleset held 0 rules that morning; it now holds the two
+policies below).
 Every agent that opens the repo is connected to Norma through the project-scoped `.mcp.json`
 (server URL only, no token).
+
+Two organisation policies were created on 27 Nov in the Norma workspace "Vet":
+- **"No second HTTP client, no browser automation"** (Banned packages, HIGH,
+  `policy-banned-deps-a5f2-1.0`): `requests`, `aiohttp`, `playwright`, `selenium` are banned.
+  Every network call goes through `vet/fetch.py`, which enforces robots.txt, rate limits and the
+  cache; vet is read-only and never renders pages, fills forms or logs in. `requests` and
+  `aiohttp` were added from Saurabh's review. Its first finding was real: the unused optional
+  extra `browser = ["playwright>=1.45"]` in pyproject.toml (score 96, 1 High). No code imported
+  playwright; the extra was removed and uv.lock refreshed (logged in findings.md).
+- **"Permissive licences only"** (Licence policy, MEDIUM, `policy-licence-a9e3-1.0`): MIT,
+  BSD-2-Clause, BSD-3-Clause, Apache-2.0, PSF-2.0, ISC. Dry run: 0 violations.
 
 How both authors' pull requests were checked on 27 Nov:
 - Aryan Kumar Singh (with Claude Code): PR #13 and PR #16 were checked with `live_check` on the
