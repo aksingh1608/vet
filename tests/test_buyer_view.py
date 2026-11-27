@@ -4,6 +4,8 @@ All companies are invented.
 """
 
 import asyncio
+import csv
+import io
 from pathlib import Path
 
 import anthropic
@@ -344,3 +346,44 @@ def test_snippet_verified_flag_still_validates(tmp_path, stackgini) -> None:
     path = write_run(tmp_path, [rec], [], stackgini)
     assert "snippet-verified; page blocks automated access" in path.read_text(encoding="utf-8")
     assert validate_stackgini_file(path, stackgini) == []
+
+
+def test_flag_links_are_cleaned_or_dropped_so_the_row_stays_valid(tmp_path, stackgini, caplog):
+    import logging
+
+    from vet.schemas import Flag, FlagColour
+
+    rec = ok_record(InputRow(url="https://acme-tools.example/", id="38"))
+    page = "https://acme-tools.example/privacy "  # an href that ended in a space
+    flags = [
+        Flag(
+            text="A privacy page linked from the homepage returns HTTP 404",
+            colour=FlagColour.YELLOW,
+            source_url=page,
+            source_type="vendor",
+            fact_id="site-2",
+        ),
+        Flag(
+            text="A finding with no usable link",
+            colour=FlagColour.RED,
+            source_url="javascript:void(0)",
+            source_type="vendor",
+            fact_id="x-1",
+        ),
+        Flag(
+            text="Another with a broken link",
+            colour=FlagColour.RED,
+            source_url="https://acme-tools.example/a b",
+            source_type="vendor",
+            fact_id="x-2",
+        ),
+    ]
+    rec = rec.model_copy(update={"buyer": rec.buyer.model_copy(update={"flags": flags})})
+    with caplog.at_level(logging.WARNING, logger="vet.buyer_view"):
+        path = write_run(tmp_path, [rec], [], stackgini)
+    assert validate_stackgini_file(path, stackgini) == []
+    text = path.read_text(encoding="utf-8")
+    assert "(vendor: https://acme-tools.example/privacy)" in text  # trailing space removed
+    row = next(csv.DictReader(io.StringIO(text, newline="")))
+    assert row["red_flags"] == "None identified."  # both unusable links dropped
+    assert sum("not an openable http(s) link" in r.getMessage() for r in caplog.records) == 2

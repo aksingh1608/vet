@@ -70,8 +70,37 @@ def order_flags(flags: list[Flag]) -> list[Flag]:
     return out
 
 
+def openable_url(url: str) -> str:
+    """The flag's link as one clean http(s) URL, or "" when it is not one.
+
+    Links taken from a vendor's HTML can carry stray whitespace (an href ending in a space);
+    surrounding whitespace is removed. Anything else that is not a single http(s) URL is
+    rejected, because the verdict file must only carry links a reader can open."""
+    url = url.strip()
+    if not url.startswith(("http://", "https://")) or any(c.isspace() for c in url):
+        return ""
+    return url
+
+
 def flag_cell(flags: list[Flag], colour: FlagColour) -> str:
-    chosen = [f for f in flags if f.colour == colour]
+    """One cell of the verdict file. A flag without an openable http(s) link is dropped and
+    logged, so the row stays valid; an empty cell reads "None identified."."""
+    chosen: list[Flag] = []
+    for flag in flags:
+        if flag.colour != colour:
+            continue
+        url = openable_url(flag.source_url)
+        if not url:
+            logger.warning(
+                "dropped %s flag %s: source %r is not an openable http(s) link",
+                colour.value,
+                flag.fact_id or "?",
+                flag.source_url,
+            )
+            continue
+        chosen.append(
+            flag if url == flag.source_url else flag.model_copy(update={"source_url": url})
+        )
     if not chosen:
         return NO_FLAGS
     return FLAG_SEPARATOR.join(render_flag(f) for f in chosen)

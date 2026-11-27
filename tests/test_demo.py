@@ -239,5 +239,5 @@ def test_demo_validates_the_verdict_file_like_vet_run(
     from_demo = problems(["demo", "acme.example"])
     from_run = problems(["run", "acme.example"])
     assert from_demo == from_run
-    # stackgini is the default format: the javascript: finding becomes a flag without a link.
-    assert from_demo == ["✗ row 1 (https://acme.example/) yellow_flags: flag 1 link is not http(s)"]
+    # The writer drops the javascript: finding (no openable link), so both report a valid file.
+    assert len(from_demo) == 1 and from_demo[0].startswith("✓ verdict file valid")
