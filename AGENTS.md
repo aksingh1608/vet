@@ -1,7 +1,7 @@
 # AGENTS.md: rules for anyone (human or AI) changing this repo
 
-`SPEC.md` is the design. This file is the short list of rules that are not negotiable, plus decisions made
-since the spec was written.
+This file is the short list of rules that are not negotiable, plus the design decisions made along the
+way. README.md describes how vet works.
 
 ## Core idea
 - Vendor pages give **claims**, never evidence in the vendor's favour.
@@ -35,7 +35,7 @@ since the spec was written.
 - Use `logging`, not `print()`; lazy `%s` formatting in log calls; timezone-aware datetimes; named
   constants for timeouts.
 
-## Decisions since the spec (approved 2026-11-25)
+## Design decisions (approved 2026-11-25)
 1. **API exception** to the fetch rules: see the APIs bullet above.
 2. **Founding year.** A claimed founding year that predates the domain/certificate/archive evidence is
    `unconfirmed`, not `contradicted`. Only a company register that disagrees makes it `contradicted`.
