@@ -216,18 +216,29 @@ the authors' code differs (whether a collector's facts reach the two-axis judge)
 
 ### 2. The tradeoff we accepted (30)
 
-- **Finding:** `error-handling-layer-1.0` (High), "A failure is caught and nobody ever finds out",
-  in `vet/orchestrator.py` (`run_product_safe`).
-- **Why we keep the catch:** one failed product must never stop the batch. A blind round must
-  return one row per input.
-- **How a failure stays visible:** in five places, all checked by
-  `test_a_failed_product_is_visible_everywhere`:
+**The per-product catch (a Norma AI finding).**
+- **The finding:** on 27 Nov Norma's AI review flagged the per-product catch in
+  `vet/orchestrator.py` (`run_product_safe`): High, `error-handling-layer-1.0`, "A failure is
+  caught and nobody ever finds out".
+- **What we accepted:** the catch itself. One failed product must never stop a batch; a blind
+  round must return one row per input.
+- **What we fixed:** only the visibility half. A failure now shows in five places, all checked
+  by `test_a_failed_product_is_visible_everywhere`:
   1. an ERROR log line with the exception type;
   2. a `product_failed` trace event;
   3. the record's errors;
   4. the row's reasoning ("run failed: ...");
   5. "N of M products failed" in the CLI summary.
-- Record: [DEFENCE.md, Accepted](DEFENCE.md#accepted), [findings.md](findings.md).
+- **Result:** after that change the AI review no longer reports it ("No AI findings on your last
+  scan, 27/11/2026 16:01 UTC"). The broad catch remains in the code by design.
+
+**The snippet fallback (self-identified, not a Norma finding).**
+- **What it does:** when a cited page refuses automated access (403/429), its quote is verified
+  from the cached search snippet. That was 119 of 876 flags on 27 Nov.
+- **Kept and marked:** each such flag says "snippet-verified; page blocks automated access".
+- **Fix after the event:** verify these pages through archive copies.
+
+Record: [DEFENCE.md, Accepted](DEFENCE.md#accepted), [findings.md](findings.md).
 
 ### 3. Found and fixed (20)
 

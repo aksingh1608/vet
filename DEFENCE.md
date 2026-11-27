@@ -44,13 +44,16 @@ as evidence. A redundant `else` after a `raise` put its normal path one level de
 to be. The loop was rewritten with an early `continue`, and `live_check` is clean again.
 
 ## Accepted
-Rule: `error-handling-layer-1.0` (High), "A failure is caught and nobody ever finds out". Raised
-by the Norma AI scan of `main` after PR #13.
-File: `vet/orchestrator.py`, `run_product_safe` (the `except Exception` around one product's run).
-Why we left it: the catch is the batch-survival design. One product that raises must never stop
-the batch: before PR #13 one API error on one product could end the whole run with nothing
-saved. We keep the catch and make sure the failure is never silent. A failed product is
-surfaced in five places, each checked by `tests/test_buyer_view.py::test_a_failed_product_is_visible_everywhere`:
+
+### Accepted 1: the per-product catch (a Norma AI finding, resolved by surfacing the failure)
+Norma's AI review flagged the per-product catch in `vet/orchestrator.py` (`run_product_safe`, the
+`except Exception` around one product's run) on 27 Nov: **High, `error-handling-layer-1.0`,
+"A failure is caught and nobody ever finds out"**.
+
+We accepted the catch itself: one failed product must never stop a batch. Before PR #13, one API
+error on one product could end the whole run with nothing saved. We fixed only the visibility
+half. A failed product now shows up in five places, each checked by
+`tests/test_buyer_view.py::test_a_failed_product_is_visible_everywhere`:
 1. `logger.exception` at ERROR level, naming the product and the exception type, with the
    traceback;
 2. a `product_failed` event with the error in the run's `trace.jsonl`;
@@ -58,8 +61,22 @@ surfaced in five places, each checked by `tests/test_buyer_view.py::test_a_faile
 4. the buyer-view row: Yellow, reasoning starting "Yellow: run failed: <ExceptionType>: ..." and
    ending "Not checked: all sources (the run failed).";
 5. the `vet run` / `vet eval` summary, which prints "N of M products failed" and lists each one.
+
+After that change the AI review no longer reports it: Norma's Findings tab shows "No AI findings
+on your last scan (27/11/2026 16:01 UTC)". The broad catch remains in the code by design.
 Cancellation is not caught (`asyncio.CancelledError` is not an `Exception`), so stopping a run
 still stops it.
+
+### Accepted 2: the snippet fallback for blocked pages (self-identified, not a Norma finding)
+When a cited page refuses automated access (HTTP 403/429), the verifier accepts the quote from the
+cached search snippet of that URL (`REFUSED_STATUSES` in `vet/verify.py`). We found this in our own
+review: the quote is in the search engine's snippet but was never seen on the live page. That was
+119 of the 876 flags in the runs of 27 Nov.
+- **Kept:** many reputable publishers block bots, and dropping these flags would remove real
+  evidence just before the live round.
+- **Made visible:** every such flag ends with "snippet-verified; page blocks automated access"
+  (PR #24), and AGENTS.md states the rule as the code applies it.
+- **Fix after the event:** verify these pages through an archive copy instead.
 
 ## Conflict between authors
 Authors: Aryan Kumar Singh (with Claude Code) and Saurabh Kumar (with Claude Code)
