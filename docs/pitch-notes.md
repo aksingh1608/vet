@@ -131,5 +131,21 @@ rubric categoriser (VET_BUYER_CATEGORISE=true). Both scored on the same runs.
 | Holdout, 12 rows (4 per label, never tuned on) | 4/12 | 5/12 | 2/4 / 3/4 | 1 / 0 |
 | All 40 (seen: the rubric was written from these rows) | 19/40 | 19/40 | 2/10 / 4/10 | 1 / 1 |
 
-The categoriser finds twice as many Reds, but it also turns most Greens into Yellow, so the
-blind round ships the baseline by default. 0 of 64 product runs failed.
+Tuning round 3, rubric level, recomputed offline from the saved all-40 records (no new
+searches): licensing confusion appears in Green rows as often as in Yellow rows, so it became
+context instead of a Yellow driver.
+
+| Variant | All 40 (seen) | Dev 12 | Red recall | Greens kept Green | Greens / Yellows called Red |
+|---|---|---|---|---|---|
+| Baseline | 19/40 | 6/12 | 2/10 | 7/14 | 0 / 1 |
+| Categorised, licensing drives Yellow | 19/40 | 6/12 | 4/10 | 3/14 | 0 / 1 |
+| (a) licensing drives Yellow only with 2 facts from 2 independent publishers | 21/40 | 7/12 | 4/10 | 4/14 | 0 / 1 |
+| (b) licensing is always context (now in the code) | 22/40 | 7/12 | 4/10 | 6/14 | 0 / 1 |
+
+All-40 numbers are on rows the rubric was written from: they are not a holdout. The decision
+rule for switching the categoriser on was: beat 19/40, Red recall at least 4/10, at least as
+many Greens kept as the baseline, no Green called Red. Option (b) misses the Greens condition
+(6 vs 7), so the blind round ships the baseline mapping (VET_BUYER_CATEGORISE=false). The base
+check in the offline recomputation uses the vendor identity and the two-axis "real" call in
+place of the model's own identifiable/operating answers, which are not saved.
+0 of 79 product runs failed today.

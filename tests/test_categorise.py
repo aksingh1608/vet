@@ -537,3 +537,13 @@ def test_different_early_site_cancels_domain_dates_but_not_a_register_date() -> 
     assert "long_track_record" not in label([age, other], [cat("long_track_record", "d1", "ar")])[1]
     names = label([age, other, reg], [cat("long_track_record", "d1", "ar", "reg")])[1]
     assert "long_track_record" in names
+
+
+def test_licensing_ambiguity_alone_is_context_and_green_stays_green() -> None:
+    facts = [
+        *ADOPTION,
+        fact("l1", url="https://press-one.example/a"),
+        fact("l2", url="https://press-two.example/b"),
+    ]
+    overall, names = label(facts, [*GREEN_CATS, cat("licensing_ambiguity", "l1", "l2")])
+    assert overall == Overall.GREEN and "licensing_ambiguity" in names

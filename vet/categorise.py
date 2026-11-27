@@ -61,7 +61,6 @@ YELLOW_DRIVERS = frozenset(
         "ownership_churn",
         "owner_squeeze_record",
         "legacy_or_superseded",
-        "licensing_ambiguity",
         "recent_incident_quiet",
         "continuity_small_vendor",
         "weak_trust_artefacts",
@@ -85,6 +84,9 @@ CONTEXT = frozenset(
         "no_legal_entity_alone",
         "unrelated_fine_or_lawsuit",
         "domain_older_than_vendor",
+        # Tuning round 3 (rubric level): naming or licensing confusion appears in Green rows as
+        # often as in Yellow rows, so on its own it is context, never a Yellow driver.
+        "licensing_ambiguity",
     }
 )
 GREEN_SIGNALS = frozenset(
