@@ -1,5 +1,29 @@
 # Defence
 
+## Policy and consistency
+The policy: [docs/norma-policy.md](docs/norma-policy.md), the rules we treat as blocking (13) and
+advisory (4), each a rule id copied from Norma's `get_rules_for_ruleset` for this repository
+(python-norma-ruleset, secrets-norma-ruleset; the org-scoped "Policies" ruleset held 0 rules).
+Every agent that opens the repo is connected to Norma through the project-scoped `.mcp.json`
+(server URL only, no token).
+
+How both authors' pull requests were checked on 27 Nov:
+- Aryan Kumar Singh (with Claude Code): PR #13 and PR #16 were checked with `live_check` on the
+  changed source files before commit (all clean; what was not re-sent after the last edit is
+  listed in findings.md), and both had a clean Norma GitHub App PR check before merge.
+- Saurabh Kumar (with Claude Code): PR #14 (identity audit) and PR #15 (archive check) each had a
+  clean Norma GitHub App PR check, and were reviewed against their brief before merge (ruff and
+  pytest run on his branch: 297 and 307 passed).
+- One Norma AI finding on main after PR #13 (`error-handling-layer-1.0`) is accepted, see below.
+
+Where the authors differed (recorded, not changed):
+- Two-axis judge exposure. `corporate` facts (Aryan) have weight 0 and never reach the judge;
+  `archive` facts (Saurabh, #15) are NEUTRAL with weight 0 because a positive non-vendor fact
+  counts toward the judge's trust floor at any weight; `identity` facts (Saurabh, #14) carry
+  weights 0.15–0.3 and do reach the judge.
+- Both of Saurabh's collectors and the `corporate` collector registered in the same lines of
+  `AFTER_SITE`; the two merge conflicts are logged in findings.md under "Author conflicts".
+
 ## Fixed
 Rule: `py-maint-else-after-return` (HIGH)
 File: vet/collectors/classify.py
@@ -33,6 +57,11 @@ verdict file showed its verdict panel with no warning.
 How we resolved it: PR #10 was merged as written. In PR #11, one shared function (`_save_run` in
 vet/cli.py) writes, validates and renders the run for both commands. A test checks that `vet demo`
 reports the same validation problems as `vet run`.
+
+A second clash, 27 Nov: Aryan's `corporate` collector and Saurabh's `identity` (PR #14) and
+`archive` (PR #15) collectors were registered in the same two lines of vet/orchestrator.py (the
+collector import and `AFTER_SITE`), which gave a git conflict at each merge. Resolved by keeping
+all three collectors; logged in findings.md under "Author conflicts".
 
 ## Other fixed findings
 All three were raised by `live_check` before commit and are logged in [findings.md](findings.md).

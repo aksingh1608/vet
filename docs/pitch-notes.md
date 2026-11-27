@@ -120,3 +120,16 @@ Sources: the repo, the tests, `runs/`, `findings.md` and the commit history. Not
   could not read is listed under "Not checked", never held against the vendor.
 - The fetcher does not yet block redirects to private or local addresses, and it does not cap
   response size (first fix after the event; see docs/threat-model.md).
+
+## Measured agreement with the organiser's labels (one traffic light per product)
+Basic search depth. "Baseline" maps today's two-axis verdict to a light; "categorised" is the
+rubric categoriser (VET_BUYER_CATEGORISE=true). Both scored on the same runs.
+
+| Set | Baseline | Categorised | Red recall (base / cat) | False Reds (base / cat) |
+|---|---|---|---|---|
+| Dev, 12 rows (tuned on, 2 rounds) | 6/12 | 6/12 | 0/4 / 1/4 | 0 / 0 |
+| Holdout, 12 rows (4 per label, never tuned on) | 4/12 | 5/12 | 2/4 / 3/4 | 1 / 0 |
+| All 40 (seen: the rubric was written from these rows) | 19/40 | 19/40 | 2/10 / 4/10 | 1 / 1 |
+
+The categoriser finds twice as many Reds, but it also turns most Greens into Yellow, so the
+blind round ships the baseline by default. 0 of 64 product runs failed.

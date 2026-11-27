@@ -14,7 +14,7 @@ grep -cE '^(ANTHROPIC|TAVILY|COMPANIES_HOUSE)_API_KEY=.+' .env   # must print 3
 uv run vet run https://basecamp.com               # smoke test, ~30 s, cached: 0 credits
 ```
 
-The submission is the **stackgini** format: one traffic light (Green / Yellow / Red) per input
+The submission is the **stackgini** format (CSV, confirmed by Stackgini; it is the default): one traffic light (Green / Yellow / Red) per input
 row with green, yellow and red flags and a reasoning. Columns default to
 `id,url,product,vendor,overall,green_flags,yellow_flags,red_flags,reasoning`; if the organiser
 confirms different columns, set them in `.env` (no code change):
@@ -54,11 +54,17 @@ Then run `uv run vet validate runs/<smoke-test-id>` to confirm the labels map.
 
 1. Save the organiser's list as `blind.csv` (columns `url` and, when given, `id`, `product`,
    `vendor`; ids are carried through) or as `blind.txt` with one URL per line.
-2. Run everything, in parallel (4 at a time), with Tavily advanced search:
+2. Run everything, in parallel (4 at a time), with Tavily advanced search. **This is the exact
+   blind-round command** (confirmed by Stackgini: the verdict file is CSV, submitted together
+   with the GitHub repo link):
 
    ```bash
    uv run vet run --file blind.csv --advanced --format stackgini
    ```
+
+   It writes `runs/<id>/stackgini.csv` (the file to submit; `stackgini.json` next to it is the
+   same rows for us). `stackgini` is also the default format, so `--format stackgini` only makes
+   it explicit.
 
    Each product is saved to `runs/<id>/products/` the moment it is done. If the run is
    interrupted (crash, laptop, network), resume it; only products without a record run again:
@@ -105,6 +111,8 @@ uv run vet validate runs/<id>        # must print ✓ (one row per input, label 
                                      # every flag link http(s) and not a search tool, reasoning)
 ls runs/<id>/stackgini.csv           # the file to submit (stackgini.json is the same rows)
 ```
+
+Submit `runs/<id>/stackgini.csv` together with the repo link: https://github.com/aksingh1608/vet
 
 **Fallback** if the new code misbehaves: `git checkout pre-event-stable` (the last two-axis
 version before the buyer view), rerun with `--format json`, and submit that.

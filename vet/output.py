@@ -38,6 +38,7 @@ from vet.schemas import (
     Verdict,
 )
 from vet.sources import is_search_tool_url
+from vet.text import normalize_url
 from vet.trace import Trace, Usage
 from vet.verify import VerifyResult
 
@@ -371,8 +372,8 @@ def validate_stackgini_file(
         if len(rows) != len(inputs):
             problems.append(f"{len(rows)} rows for {len(inputs)} inputs")
         for i, (row, given) in enumerate(zip(rows, inputs, strict=False), start=1):
-            want = given.id or given.url
-            have = row.get("id", "") if given.id else row.get("url", "")
+            want = given.id or normalize_url(given.url)
+            have = row.get("id", "") if given.id else normalize_url(row.get("url", ""))
             if have != want:
                 problems.append(f"row {i}: expected input {want!r}, found {have!r}")
     for i, row in enumerate(rows, start=1):
