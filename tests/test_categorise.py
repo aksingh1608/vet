@@ -505,3 +505,35 @@ def test_non_core_divestment_with_owner_scope_stays_ownership_churn() -> None:
     cats = [*GREEN_CATS, cat("ownership_churn", "d1", scope="parent")]
     overall, names = label(facts, cats)
     assert overall == Overall.YELLOW and "ownership_churn" in names
+
+
+def _archive(fid: str, topic: str) -> Fact:
+    f = fact(
+        fid,
+        url="https://web.archive.org/web/2012/https://acme-tools.example/",
+        source_type="record",
+        kind=SourceKind.RECORD,
+        topic=topic,
+    )
+    return f.model_copy(update={"collector": "archive", "polarity": Polarity.NEUTRAL})
+
+
+def test_same_vendor_since_gives_track_record_by_topic_not_polarity() -> None:
+    from vet.categorise import proposed_by_code
+
+    facts = [*ADOPTION, _archive("ar", "same_vendor_since")]
+    out = _CategoriseOut(identifiable_vendor=True, operating_now=True, categories=[])
+    (proposed,) = proposed_by_code(out, facts)
+    assert proposed.category == "long_track_record"
+    overall, names = label(facts, [*GREEN_CATS, proposed])
+    assert overall == Overall.GREEN and "long_track_record" in names
+
+
+def test_different_early_site_cancels_domain_dates_but_not_a_register_date() -> None:
+    age = fact("d1", source_type="record", kind=SourceKind.RECORD, topic="first_capture")
+    age = age.model_copy(update={"collector": "age"})
+    other = _archive("ar", "domain_older_than_vendor")
+    reg = fact("reg", source_type="record", kind=SourceKind.RECORD, topic="register_entry")
+    assert "long_track_record" not in label([age, other], [cat("long_track_record", "d1", "ar")])[1]
+    names = label([age, other, reg], [cat("long_track_record", "d1", "ar", "reg")])[1]
+    assert "long_track_record" in names

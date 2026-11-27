@@ -33,6 +33,10 @@ other), logo_wall_not_customers (a "trusted by" wall of badges, programmes or pa
 policy_as_file (legal or trust policies only as a downloaded file or placeholder), coming_soon
 (the product is announced as coming soon), company_size (independent company-size figure; context
 for judging traction).
+Facts from the archive check carry these topics: same_vendor_since (the earliest readable archive
+copy of the domain already names this vendor: a track record) and domain_older_than_vendor (the
+earliest copy shows a different site: context, and domain dates then earn no track record). Both
+are neutral by design; read them by topic, not by polarity.
 
 ## RED categories
 - regulator_finding_core: a regulator or court found, ordered or fined the vendor for deceptive

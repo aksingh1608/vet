@@ -84,6 +84,7 @@ CONTEXT = frozenset(
         "lawsuit_filed",
         "no_legal_entity_alone",
         "unrelated_fine_or_lawsuit",
+        "domain_older_than_vendor",
     }
 )
 GREEN_SIGNALS = frozenset(
@@ -144,6 +145,7 @@ CATEGORY_TOPICS: dict[str, frozenset[str]] = {
     "no_entity_plus_claims": frozenset({NO_ENTITY_TOPIC, *CLAIM_TOPICS}),
     "discontinued": frozenset({"lifecycle_end", "lifecycle_statement"}),
     "legacy_or_superseded": frozenset({"lifecycle_end", "lifecycle_statement"}),
+    "long_track_record": frozenset({"same_vendor_since"}),
 }
 # Topics the collectors already classified: code proposes the category when the model did not.
 # corporate: regulator and sanctions events. identity (Step 5): vendor-page contradictions.
@@ -154,7 +156,11 @@ PROPOSE_FROM_TOPIC: dict[str, str] = {
     "traction_inconsistent": "implausible_traction",
     "policy_as_file": "weak_trust_artefacts",
     "coming_soon": "weak_trust_artefacts",
+    # archive (Step 5, v3): read by topic; both facts are NEUTRAL with weight 0 on purpose.
+    "same_vendor_since": "long_track_record",
+    "domain_older_than_vendor": "domain_older_than_vendor",
 }
+DIFFERENT_EARLY_SITE = "domain_older_than_vendor"
 # Publisher types that may support a label-driving category but never carry it alone.
 WEAK_SOURCE_TYPES = frozenset({"directory", "social", "forum"})
 MAX_EXTRA_CHECKS = 12
@@ -270,13 +276,13 @@ def evidence_ok(
         if not against_interest and not any(_is_strong(f) for f in cited):
             return False, "no strong source"
     if category == "long_track_record" and all(
-        f.topic in DOMAIN_DATE_TOPICS or f.collector in DOMAIN_DATE_COLLECTORS for f in cited
+        f.topic in DOMAIN_DATE_TOPICS
+        or f.collector in DOMAIN_DATE_COLLECTORS
+        or f.topic == DIFFERENT_EARLY_SITE
+        for f in cited
     ):
+        # Domain dates never count alone; a different early site on the domain cancels them too.
         return False, "domain dates alone are not a track record"
-    if category == "long_track_record" and any(
-        f.topic == "domain_older_than_vendor" for f in cited
-    ):
-        return False, "archive shows a different site on the domain"
     if category == "wide_adoption":
         publishers = {
             registered_domain(f.source_url)
