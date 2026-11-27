@@ -1,162 +1,283 @@
 # vet
 
-**Anyone can generate a convincing website. vet checks claims against records.**
+**vet checks a software vendor's claims against independent records and gives a buyer one traffic
+light (Green, Yellow or Red) with sourced flags and a short reasoning.**
 
-## The problem
+> **In 60 seconds**
+> - **What:** give vet product URLs. For each one it reads the vendor site as *claims*, then
+>   collects *evidence* from records and independent sources, verifies every cited source, and
+>   writes one row of the verdict CSV.
+> - **Built for:** Stackgini "Agents with Taste" (vendor due diligence) and Norma (governed AI coding).
+> - **Measured** against the organiser's 40 labelled products (one traffic light each): **19/40**
+>   on all 40, **4/12** on a holdout we never tuned on, **0 Greens called Red**.
+>   The 40 rows are the ones the rubric was written from (details below).
+> - **Speed:** cold cache at advanced depth, **60–68 s and 20–26 search credits per product**,
+>   4 products in parallel.
+> - **One command:** `uv run vet run --file input.csv --advanced --format stackgini`
 
-A polished website, glowing copy and a list of famous customers now take an afternoon to make, so they
-say nothing about whether a software vendor is real. Buyers still have to decide whether a product is
-alive and whether the company behind it deserves their data and money. Checking that by hand means
-digging through domain records, company registers, breach lists and independent mentions for every
-vendor.
+## Why this approach is different
 
-Give vet a product's URL and it returns:
+| Choice | Where in the code |
+|---|---|
+| **Evidence over looks.** Site design never decides a label: the `looks` facts are low-weight filler, excluded from every score and used only as last-resort reasons. | `vet/collectors/looks.py`, `vet/judge.py` |
+| **Every reason is verified against its source.** The quote must be on the page or in the machine record, a model checks that it supports the sentence, and anything that fails is dropped. | `vet/verify.py` |
+| **Labels are decided in code, not by the model.** The model ranks fact ids; code rules decide the two axes and the traffic light. | `vet/judge.py`, `vet/buyer_view.py` |
+| **Page text is hostile input.** Hidden text and text addressed to AI are removed before any model sees a page, and the attempt itself becomes a red flag. | `vet/guard.py`, `tests/fixtures/redteam/` |
+| **Honest measurement.** Baseline vs categoriser, a holdout, and live rehearsals on unseen products. We kept the categoriser **off** because the live rehearsal failed it. | `docs/pitch-notes.md` |
 
-- **real_alive**: is the product real and still being built? (`yes` / `unclear` / `no`)
-- **trust**: would you trust the company with your data and money? (`trust` / `caution` / `do_not_trust`)
-- **reasons**: 4–7 short reasons, strongest first, each linked to a page that says what the reason claims.
+## Input → output
 
-Built for the Stackgini "Agents with Taste" challenge (AI Agents Berlin, 27 Nov 2026). `SPEC.md` has the
-full design and `AGENTS.md` the working rules.
+Input (`docs/examples/input.csv`) and the verdict file `vet` wrote for it
+(`docs/examples/output.csv`, the exact blind-round command, 27 Nov):
+
+| id | url | overall | first green flag (from output.csv) |
+|---|---|---|---|
+| ex2 | https://www.projektron.de | Green | North Data has a register page for Projektron GmbH (Amtsgericht Charlottenburg HRB 79669). |
+| ex3 | https://zammad.com | Green | North Data has a register page for Zammad GmbH (Charlottenburg HRB 163946 B). |
+
+ex3 also carries a yellow flag, kept because it is verified: SecurityWeek reports that two Zammad
+zero-days were exploited to breach DIVD, a Zammad user, not Zammad's own systems. Every flag ends
+with its source type and link. Output columns: `id,url,product,vendor,overall,green_flags,yellow_flags,red_flags,reasoning`.
+
+The batch overview (`vet overview`) for that run:
+
+![Batch overview: two products, both Green, first flag and report link per row](docs/img/overview.png)
+
+A **Red** example, on a **synthetic test site** (no real company, rendered from the test fixtures
+with no network): a domain registered six weeks ago, a founding year claimed as 2015, no register
+entry, no independent mentions. This is the two-axis report page (no / do not trust); the buyer
+view maps it to Red.
+
+![Report for the synthetic hollow vendor: not real, do not trust](docs/img/hollow-scenario.png)
 
 ## How it works
 
 ```mermaid
 flowchart LR
-    A[Product URL] --> B[Site reader<br/>claims only]
-    B --> C[6 collectors<br/>age · legal_id · footprint<br/>risk · alive · looks]
-    C --> D[Claims check<br/>claims vs records]
-    D --> E[Labels in code<br/>weights + thresholds]
-    E --> F[Verifier<br/>re-reads every source]
-    F --> G[Verdict file<br/>+ HTML report]
+    A[input.csv<br/>id, url] --> B[site reader<br/>vendor pages = claims]
+    B --> G[guard<br/>hidden + AI-addressed text removed,<br/>attempts become red flags]
+    G --> C{collectors in parallel}
+    C --> C1[age<br/>RDAP, crt.sh, Wayback]
+    C --> C2[legal_id<br/>company registers]
+    C --> C3[footprint<br/>reviews, customers, press]
+    C --> C4[risk<br/>breaches, lawsuits, shutdowns]
+    C --> C5[alive<br/>GitHub, PyPI, npm, App Store]
+    C --> C6[identity<br/>entity, traction, logo wall]
+    C --> C7[archive<br/>earliest Wayback copy]
+    C --> C8[corporate<br/>regulators, owners, licensing]
+    C --> C9[looks<br/>filler only]
+    C1 & C2 & C3 & C4 & C5 & C6 & C7 & C8 & C9 --> D[claims check<br/>claims vs records]
+    D --> E[judge model<br/>ranks fact ids]
+    E --> F[verification<br/>quote on page + support check]
+    F --> H[labels decided in code]
+    H --> I[buyer view<br/>Green / Yellow / Red,<br/>flags, reasoning]
+    I --> J[stackgini.csv]
+    I --> K[HTML report]
+    I --> L[overview.html]
 ```
 
-- **The vendor's site gives claims, never evidence.** Evidence comes from records (RDAP, certificate logs,
-  the Wayback Machine, company registers, Have I Been Pwned) and independent sources. A claim is
-  confirmed only when a record states the same number, name, year or identifier.
-- **Labels are decided in code.** Each verified fact has a weight and a direction; fixed thresholds turn
-  the score into a label. The model only writes the summary and ranks the reasons.
-- **Every reason is verified.** Its source is checked again for what the reason says. A reason that fails
-  is dropped, and the labels are recomputed without it. A search tool's own page (such as Tavily's
-  generated company profiles) is never a source.
-- **Believing everything and doubting everything both fail.** "no" needs two independent negative
-  signals; "do_not_trust" needs a red flag (a breach, a contradicted claim, or the hollow pattern).
-- **Absence is stated only from a checkable record.** "Our searches found nothing" is never a reason.
+**The model writes, the code decides.**
 
-## What a verdict looks like
+`corporate` runs only when the categoriser is on (`VET_BUYER_CATEGORISE=true`, off by default).
 
-A synthetic hollow vendor, rendered from the test fixtures with no network and no real company: a
-domain registered six weeks ago, a claimed founding year of 2015, no register entry and no independent
-mentions.
+## What we check
 
-![Report for the synthetic hollow-vendor scenario: no / do not trust](docs/img/hollow-scenario.png)
+| Signal family | Collector | Source type |
+|---|---|---|
+| What the vendor says (founding year, customers, certifications) | `site_reader` | vendor (claims, never evidence in its favour) |
+| Domain registration, first certificate, archive history | `age` | record (RDAP, crt.sh, Wayback CDX) |
+| Earliest archived homepage: same vendor or a different site | `archive` | record (Wayback snapshot) |
+| Legal entity, register number | `legal_id` | record (Companies House API; North Data via search snippets) |
+| Reviews, named customers, press, marketplaces | `footprint` | independent (Tavily search, quote must be in the result) |
+| Breaches, lawsuits, fines, insolvency, shutdowns | `risk` | record (Have I Been Pwned) and press |
+| Release activity of matching accounts | `alive` | record (GitHub, PyPI, npm, iTunes lookup) |
+| Legal entity on the site, traction consistency, logo wall, policies, "coming soon" | `identity` | vendor pages (contradictions observed by code) |
+| Regulator and court findings, ownership, licensing, sanctions, lifecycle statements | `corporate` | regulator, court, press; vendor statements against interest |
+| Claims vs records (e.g. founding year vs domain age) | `claims_check` | computed from the above |
+| Attempts to steer an AI evaluator | `guard` | the page itself (hard red flag) |
 
-Projektron, from one of our own rehearsal runs: a registered Berlin company with a 25-year archive
-history and independent reviews. The saved run was re-derived offline with the current code:
-- Search-tool pages were dropped.
-- The claims were checked again.
-- Labels and reasons were recomputed from the saved verification results.
+Breach data: [Have I Been Pwned](https://haveibeenpwned.com).
 
-The summary and confidence come from the original run.
+## AI security layer
 
-![Report for projektron.de: yes / trust](docs/img/projektron.png)
+Full model: [docs/threat-model.md](docs/threat-model.md).
 
-## Security
+- **Trust boundaries.** Internet → `fetch.py` → guard → `<untrusted_content>` block → model →
+  fact ids → code rules → verified output. Each boundary has its own control.
+- **The guard** (`vet/guard.py`):
+  - What it scans: visible text, CSS-hidden elements, comments, `alt`/`title` attributes and
+    `<meta>` tags.
+  - What it removes: hidden elements and every paragraph that addresses an AI evaluator.
+  - Tag escape: an `</untrusted_content>` inside a page is escaped, so it cannot close the data
+    block.
+  - The attempt itself is recorded as a hard red flag.
+- **Red-team fixtures** (`tests/fixtures/redteam/`, 19 tests in `tests/test_guard.py`). Five
+  vendor homepages:
+  - visible "note to AI evaluators" text;
+  - CSS-hidden text;
+  - comments and meta tags;
+  - alt/title and white-on-white text;
+  - a tag-escape attempt.
+  Every payload carries a marker word that the tests prove never reaches the model. Ordinary AI
+  product copy and an `llms.txt` link are *not* flagged.
+- **Least privilege for the model.** No tools and no network. It returns labels within the
+  allowed set and **fact ids**, never sources or URLs of its own. Ids that do not exist are
+  dropped, and quotes must appear verbatim on the page they cite.
+- **Read-only fetcher** (`vet/fetch.py`). Every network call goes through it:
+  - GET only, except POST where an API requires it;
+  - robots.txt respected for websites;
+  - a per-host rate limit (Wayback ≤ 20/min, crt.sh ≤ 4/min, Tavily ≤ 100/min);
+  - 15 s timeouts and a cache;
+  - never forms, logins, or contact with vendors.
+- **No secrets in logs.** Keys come only from `.env`, are sent only in headers, and never appear
+  in URLs, cache keys, logs or traces.
 
-- Page text is data, not instructions. `vet/guard.py` removes hidden text and text addressed to AI
-  evaluators before anything reaches the model. Such text is recorded as a hard-flag red flag, never
-  obeyed. Ordinary `llms.txt` / AI-docs pages are not a red flag.
-- All outside content reaches the model only inside `<untrusted_content>` tags.
-- Five red-team fixture sites (`tests/fixtures/redteam/`) attack through visible text, CSS-hidden text,
-  comments and meta tags, attributes and white-on-white text, and a tag-escape attempt.
-- The HTML report is self-contained (no scripts, fonts or external assets) and links only to evidence.
-- Threat model: [docs/threat-model.md](docs/threat-model.md).
+## Measured results
 
-## Governance with Norma
+The organiser sent 40 labelled products. We score agreement on the single traffic light; the
+labelled data never leaves this machine. Basic search depth; the baseline (what ships) maps the
+two-axis verdict to a light.
 
-- Changes were checked with Norma `live_check` before commit. The one exception was PR #10: Saurabh's
-  check was refused because his Norma account is not linked to this repository, so his files were
-  checked afterwards and came back clean. A `live_check` sweep of all of `main` found 0 issues.
-- The Norma GitHub App checked PRs #2–#10. Each check said "No issues introduced by your changes."
-- [findings.md](findings.md) logs every Norma result and the author conflict.
-  [DEFENCE.md](DEFENCE.md) explains each finding: fixed, accepted, or a conflict between authors.
-- Two authors, each working with Claude Code: Aryan Kumar Singh and Saurabh Kumar (`vet demo`, PR #10).
+| Set | Baseline (ships) | Categoriser | Red recall (base / cat) | Greens called Red (base / cat) |
+|---|---|---|---|---|
+| Dev, 12 rows (tuned on) | 6/12 | 7/12 | 0/4 / 1/4 | 0 / 0 |
+| Holdout, 12 rows (4 per label, never tuned on, run once) | **4/12** | 5/12 | 2/4 / 3/4 | 0 / 0 |
+| All 40, **seen** (the rubric was written from these rows) | **19/40** | 22/40 | 2/10 / 4/10 | 0 / 0 |
 
-## Results
+The categoriser column for dev and all 40 is the final rule (licensing confusion as context),
+recomputed offline from saved runs. The holdout figure is from before that change.
 
-- **Scenario tests** (`tests/test_scenarios.py`, no network). Each scenario is judged with the model down,
-  with a model that always says yes/trust, and with one that always says no/do_not_trust:
-  - Hollow vendor: no / do_not_trust every time.
-  - Real but tiny: unclear / caution every time.
-  - Dead product: no / caution every time.
-- **Stability:** labels are decided in code, so the model's opinion cannot move them. 10 of 11 products
-  gave identical labels across two reruns. The one that changed did so because the evidence found
-  changed, not the model.
-- **Rehearsal timing** (11 products, cold caches): 59.6 s and 20.2 Tavily credits per product on average,
-  about 188 s for the whole run at 4 products in parallel.
-- **Tests:** 279, all offline.
+**Why the categoriser is off.** It scores higher on the labelled rows. But a live rehearsal with
+it switched on, on 3 products the agent had not seen, gave **2 wrong Reds of 3**, and one product
+took **134 s** (our limit is 120 s). So the blind round uses the baseline.
 
-## Limitations
+**Speed and cost** (blind-round settings: baseline, advanced depth):
 
-- We had no organiser labels before the event, so the thresholds were calibrated on our own 11
-  products and the scenario tests.
-- Borderline products can vary between runs with the evidence found. For example, one more strong
-  independent site can move a mid-age vendor from "caution" to "trust".
-- `.de` domains have no RDAP creation date, so their age comes from certificate logs and the Wayback
-  Machine only.
+| Run | Seconds per product | Credits per product | Failed |
+|---|---|---|---|
+| Rehearsal, 3 unseen products, cold cache | 60–68 | 20–26 | 0 of 3 |
+| Example run, 3 products (2 with warm cache; 2 shown above) | 22–61 | 8–26 | 0 of 3 |
 
-## Setup
+0 failed products across all of 27 Nov's runs. If one fails, the batch keeps going and that row
+says "run failed: ...".
+
+## Norma governance
+
+- **Two team policies** in the Norma workspace "Vet":
+  - **"No second HTTP client, no browser automation"** (banned packages, High): bans `requests`,
+    `aiohttp`, `playwright` and `selenium`. Every network call goes through `vet/fetch.py`, which
+    enforces robots.txt, rate limits and the cache. vet is read-only and never renders pages,
+    fills forms or logs in. `requests` and `aiohttp` came from Saurabh's review.
+  - **"Permissive licences only"** (licence, Medium): MIT, BSD-2/3-Clause, Apache-2.0, PSF-2.0, ISC.
+    Dry run: 0 violations.
+- **A policy finding, fixed: score 96 → 100 (PR #21).** The banned-packages policy flagged an
+  unused optional extra (`playwright`) in `pyproject.toml`. No code imported it; we removed it
+  and refreshed `uv.lock`.
+- **An accepted tradeoff.** Norma's `error-handling-layer-1.0` flagged the per-product catch in
+  `vet/orchestrator.py`. We keep it, because one failed product must never stop the batch. The
+  failure is surfaced instead, in five places: ERROR log, trace, record errors, the row's
+  reasoning, and "N of M products failed" in the CLI. A test covers it.
+- **An author conflict.** Both authors registered new collectors in the same lines of
+  `orchestrator.py`. Each merge kept all of them, and each conflict is logged.
+- **Both coding agents connected to Norma via MCP**; `.mcp.json` connects every agent that opens
+  the repo (URL only, no token). The Norma GitHub check ran on every PR; the `live_check` results
+  before commits are logged in findings.md.
+- **Merged PRs:** Aryan Kumar Singh 17, Saurabh Kumar 4.
+
+Details: [DEFENCE.md](DEFENCE.md), [findings.md](findings.md), [docs/norma-policy.md](docs/norma-policy.md).
+
+## Quickstart
 
 ```bash
-uv sync                 # Python 3.12, installs vet + dev tools
-cp .env.example .env    # then fill in the API keys
+uv sync                                   # Python 3.12
+cp .env.example .env                      # then fill in ANTHROPIC_API_KEY and TAVILY_API_KEY
+                                          # (COMPANIES_HOUSE_API_KEY optional)
+uv run vet run --file input.csv --advanced --format stackgini   # CSV with columns id,url
+uv run vet validate runs/<id>             # one row per input, valid labels and links
+uv run vet overview runs/<id>             # writes runs/<id>/report/overview.html
 ```
 
-## Usage
+Outputs go to `runs/<id>/` (gitignored):
+- `stackgini.csv` (the verdict file) and `stackgini.json`;
+- one JSON record per product in `products/`;
+- `trace.jsonl`;
+- the HTML reports in `report/`.
 
-```bash
-uv run vet --help
-uv run vet run https://example.com                  # verdict file + report in runs/<id>/
-uv run vet run --file urls.txt --advanced           # up to 5 in parallel, Tavily advanced
-uv run vet run https://x.example --into runs/<id>   # rerun one product inside a run
-uv run vet run --file urls.txt --format csv         # JSON (default) or CSV verdict file
-uv run vet demo https://example.com                 # one product, live progress + verdict panel
-uv run vet demo --from-run runs/<id>                # replay a saved run, no network
-uv run vet validate runs/<id>                       # check the verdict file (JSON or CSV)
-uv run vet report runs/<id>                         # static HTML into site/ (--public guard)
-uv run vet eval                                     # labelled sets -> runs/<id>/eval.md
-```
+If a run is interrupted, resume it with `--into runs/<id> --missing-only`. The full live-round
+procedure is in [RUNBOOK.md](RUNBOOK.md).
 
-Labels for `vet eval` come from `data/labelled/` (organiser's examples, CSV/JSON, column names set with
-`VET_LABEL_COLUMNS`) and `eval/extra_set.yaml` (ours).
+## Code map
 
-## Live round
+| Path | What it does | Tests |
+|---|---|---|
+| `vet/cli.py` | Commands: `run`, `eval`, `validate`, `report`, `overview`, `demo`, `credits` | 10 (`test_demo`), 7 (`test_overview`) |
+| `vet/orchestrator.py` | One product end to end within a time budget; batch survival | 4 (`test_orchestrator`), 14 (`test_buyer_view`) |
+| `vet/fetch.py` | The only HTTP client: robots.txt, per-host limits, timeouts, retries, cache | 26 |
+| `vet/guard.py` | Hidden and AI-addressed text: remove, then flag | 19 |
+| `vet/site_reader.py` | Reads the vendor's pages into claims; Wayback fallback for blocked pages | 18, 2 (`test_archive_fallback`) |
+| `vet/collectors/` | age 5, alive and looks 5, legal_id 8, footprint 2 + 9 (`test_recall`), risk 26, identity 8, archive 10, corporate 8, classify 1 | 82 |
+| `vet/claims_check.py` | Claims against records (confirmed, unconfirmed, contradicted) | 11 |
+| `vet/judge.py` | Two-axis labels decided in code; the model ranks fact ids | 24, 35 (`test_scenarios`) |
+| `vet/verify.py` | Re-checks every reason and finding; reason selection | 9, 24 (`test_selection`) |
+| `vet/buyer_view.py` | Traffic light (baseline mapping), flags, failed-run row | in `test_buyer_view` |
+| `vet/categorise.py` | Rubric categoriser (off by default) | 44 |
+| `vet/output.py` | `stackgini.csv`, validation, per-product records | 6 |
+| `vet/report.py`, `vet/overview.py` | HTML report and batch overview (autoescaped, http(s) links only) | 7, 7 |
+| `vet/labels.py`, `vet/evaluate.py` | Labelled-set loader and eval harness | 6, 1 |
+| `vet/llm.py`, `vet/tavily.py`, `vet/schemas.py` | Model wrapper (cached, structured), search client, data contracts | 4, 5, 12 |
 
-See [RUNBOOK.md](RUNBOOK.md).
+**Total: 370 tests**, all offline.
 
-## Development
+## Design decisions
 
-```bash
-uv run pytest           # unit tests, no network
-uv run ruff check .
-uv run ruff format .
-```
+| Decision | Alternative we rejected | Why |
+|---|---|---|
+| Labels decided by code rules | Let the model choose the label | Reproducible, and a page cannot argue the model into a label |
+| Model returns fact ids only | Model writes citations | It cannot invent a source; every link comes from a collected fact |
+| One fetcher for all traffic | An HTTP client per collector | robots.txt, rate limits and the cache are enforced in one place (and by a Norma policy) |
+| Review sites, North Data and LinkedIn read only via search snippets | Scraping them | They block or forbid bots |
+| LLM answers cached by input | Temperature 0 | The current models take no temperature setting; the cache makes reruns identical |
+| Keep the per-product catch, surface the failure | Let one error stop the batch | A blind round must always produce one row per input |
+| Baseline traffic light in the blind round | Categoriser on | The live rehearsal gave 2 wrong Reds of 3 and one product took 134 s |
+| A young domain is never a negative in the buyer view | Penalise new domains | Rebrands and carve-outs get new domains |
+| A dated website never decides a label | Score design quality | The labelled data shows looks do not drive the call |
 
-## Network etiquette
+## Tech stack
 
-All network traffic goes through `vet/fetch.py`.
-- For websites: GET only, robots.txt respected.
-- At most 1 request/second per host by default.
-- 15 s timeout, retries with backoff.
-- An identifying User-Agent and a SQLite cache.
+| Tool | Why |
+|---|---|
+| Python 3.12, asyncio | Collectors and products run concurrently within one time budget |
+| httpx | One async client, behind `vet/fetch.py` |
+| pydantic v2 | Every fact, verdict and model answer is validated |
+| Anthropic API (judge and fast model) | Structured outputs; the fast model classifies, the judge ranks and writes |
+| Tavily | Search with cached responses, so reruns cost 0 credits |
+| trafilatura | Main-text extraction from vendor pages |
+| Jinja2 | HTML report and overview with autoescaping |
+| SQLite | Fetch and LLM caches |
+| Typer + Rich | CLI and live progress |
+| uv, ruff, pytest | Reproducible installs, lint, 370 offline tests |
+| Norma (MCP + GitHub App) | Rule checks while coding and on every PR; team policies |
 
-vet never submits forms, logs in, or contacts vendors.
+## Limits and next steps
 
-## Data
-
-`data/labelled/` and `runs/` are gitignored. The organiser's examples and our verdicts on their products are
-never committed or published.
+- **Not detected yet** (from Saurabh's review): a copied imprint, shelf companies, virtual-office
+  addresses, founder history, bought reviews, review blogs owned by the vendor, and pages that
+  need JavaScript rendering.
+- **No certification registers.** A SOC 2 or ISO badge is reported as a claim, never as verified
+  and never as missing.
+- **Fetcher hardening comes first after the event.** Redirects to private or local addresses are
+  not blocked yet, and response size is not capped.
+- **Categoriser:** fix the two false-Red patterns the rehearsal exposed (a third party ending its
+  own service; an old major version's end of life), then re-measure on unseen products.
+- **A known false flag:** in one example run a changelog's newest date was misread. That row was
+  removed from the examples, and the fix is next.
 
 ## Team
 
-Aryan Kumar Singh, Saurabh Kumar.
+Team **"Vet"**: Aryan Kumar Singh and Saurabh Kumar, each working with Claude Code.
+
+## Data policy
+
+The organiser's labelled data and our verdicts on their products are never in this repo:
+`data/labelled/` and `runs/` are gitignored and were never committed. The tests use invented
+companies only. Secrets come only from `.env`, which is never committed.
