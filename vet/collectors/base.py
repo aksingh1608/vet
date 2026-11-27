@@ -83,7 +83,7 @@ async def run_collector(
             facts = await collect(ctx)
     except TimeoutError:
         error = f"timed out after {timeout_s:.0f}s"
-    except Exception as exc:  # noqa: BLE001 - graceful failure is a hard rule of the spec
+    except Exception as exc:  # noqa: BLE001 - graceful failure is a hard rule in AGENTS.md
         error = f"{type(exc).__name__}: {exc}"
         logger.warning("collector %s failed for %s", name, ctx.url, exc_info=True)
     seconds = round(time.monotonic() - started, 2)

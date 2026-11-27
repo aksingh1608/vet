@@ -279,3 +279,31 @@ async def test_post_api_reports_cache_hits(make_fetcher) -> None:
         second = await f.post_api("https://api.example/search", {"query": "x"})
     assert not first.from_cache
     assert second.from_cache
+
+
+async def test_github_token_goes_only_to_the_github_api_and_never_into_the_cache(
+    tmp_path, clock
+) -> None:
+    import httpx
+    from pydantic import SecretStr
+
+    from tests.conftest import Recorder
+    from vet.config import Settings
+    from vet.fetch import FetchCache, Fetcher, cache_key
+
+    token = "ghp-test-not-real"  # noqa: S105 - placeholder, never sent anywhere
+    settings = Settings(
+        cache_path=tmp_path / "c.sqlite", contact="test", github_token=SecretStr(token)
+    )
+    rec = Recorder(lambda request: httpx.Response(200, json=[]))
+    client = httpx.AsyncClient(transport=httpx.MockTransport(rec))
+    cache = FetchCache(settings.cache_path)
+    async with Fetcher(settings, client=client, cache=cache, clock=clock, sleep=clock.sleep) as f:
+        await f.get_json("https://api.github.com/users/acme-tools/repos")
+        await f.get_json("https://pypi.org/pypi/acme-tools/json")
+    by_host = {r.url.host: r.headers.get("authorization") for r in rec.requests}
+    assert by_host["api.github.com"] == f"Bearer {token}"
+    assert by_host["pypi.org"] is None
+    key = cache_key("GET", "https://api.github.com/users/acme-tools/repos")
+    assert token not in key
+    assert token not in settings.cache_path.read_bytes().decode("latin-1")
