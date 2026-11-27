@@ -184,6 +184,8 @@ lockfile. Details and the rule-level policy: [docs/norma-policy.md](docs/norma-p
 | No second HTTP client, no browser automation (banned: `requests`, `aiohttp`, `playwright`, `selenium`) | `policy-banned-deps-a5f2-1.0` | High | Every network call goes through `vet/fetch.py`, which enforces robots.txt, rate limits and the cache. vet is read-only and never renders pages, fills forms or logs in. | Saurabh: `requests`, `aiohttp`. Both: browser automation |
 | Permissive licences only (MIT, BSD-2/3-Clause, Apache-2.0, PSF-2.0, ISC) | `policy-licence-a9e3-1.0` | Medium | No licence obligations we cannot review. Dry run: 0 violations. | Both |
 
+![Norma workspace "Vet": the two policies, both on the vet repository with 0 open issues](docs/img/norma-policies.png)
+
 Consistency between the two authors: both agents worked against the same rules. The one place
 the authors' code differs (whether a collector's facts reach the two-axis judge) is recorded in
 [DEFENCE.md](DEFENCE.md#policy-and-consistency).
@@ -220,7 +222,9 @@ the authors' code differs (whether a collector's facts reach the two-axis judge)
 
 ### 4. Production-Ready Score (20)
 
-100/100 (Gold) on `main`.
+100/100 (Gold) on `main`: 6 rulesets, 158 rules, 0 issues, 100% in every functional area.
+
+![Norma Production-Ready Score for vet on main: 100/100 Gold, 0 issues](docs/img/norma-score-100.png)
 
 ### Required items
 
