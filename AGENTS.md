@@ -51,6 +51,7 @@ since the spec was written.
 | Have I Been Pwned | 1 req / 2 s, descriptive User-Agent | Only `GET https://haveibeenpwned.com/api/v3/breaches?domain={domain}`, no key. Never call `breacheddomain` or `breachedaccount`. The HTML report must credit "Breach data: Have I Been Pwned" linking to haveibeenpwned.com |
 | North Data | never fetched | Found only via Tavily `include_domains`; the Tavily result content is the quote and its URL the source. The verifier accepts the cached Tavily snippet as page content for these domains only |
 | G2, Capterra, Trustpilot, OMR Reviews, Software Advice, Gartner (Peer Insights), LinkedIn | never fetched | Snippet-only like North Data (approved 2026-11-26): the Tavily result content is the quote and its URL the source |
+| Any other page that refuses automated access (HTTP 403/429) | fetched, refused | The verifier may accept the quote from the cached Tavily snippet of that URL (`REFUSED_STATUSES` in `vet/verify.py`), because many reputable publishers block bots. Every such flag is marked in the output as "snippet-verified; page blocks automated access" (approved 2026-11-27). Planned fix: verify these pages through an archive copy instead |
 | GitHub API, PyPI, npm registry, iTunes lookup | default 1 req/s | `alive` collector; only for accounts or packages whose name matches the vendor |
 | Tavily | `search_depth: basic` | `advanced` only with `VET_TAVILY_ADVANCED=true`. Every response is cached (key = query + parameters), so reruns cost 0 credits. Credits per product are logged in the trace |
 

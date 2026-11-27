@@ -263,6 +263,10 @@ procedure is in [RUNBOOK.md](RUNBOOK.md).
 - **Not detected yet** (from Saurabh's review): a copied imprint, shelf companies, virtual-office
   addresses, founder history, bought reviews, review blogs owned by the vendor, and pages that
   need JavaScript rendering.
+- **Snippet-verified flags.** When a page refuses automated access (403/429), its quote is
+  verified from the cached search snippet, and the flag says "snippet-verified; page blocks
+  automated access". That was 119 of the 876 flags in the runs of 27 Nov. Planned fix: verify
+  these pages through an archive copy.
 - **No certification registers.** A SOC 2 or ISO badge is reported as a claim, never as verified
   and never as missing.
 - **Fetcher hardening comes first after the event.** Redirects to private or local addresses are

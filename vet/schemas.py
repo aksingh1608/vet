@@ -166,6 +166,9 @@ class Flag(_Model):
     category: str = ""
     fact_id: str = ""
     decisive: bool = False
+    # The page refused our fetcher (403/429) and the quote was verified from the cached search
+    # snippet. Shown in the flag text; never changes facts, weights or labels.
+    snippet_verified: bool = False
 
 
 class BuyerVerdict(_Model):

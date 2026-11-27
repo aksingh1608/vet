@@ -77,9 +77,26 @@ def flag_cell(flags: list[Flag], colour: FlagColour) -> str:
     return FLAG_SEPARATOR.join(render_flag(f) for f in chosen)
 
 
+SNIPPET_VERIFIED_NOTE = "snippet-verified; page blocks automated access"
+
+
 def render_flag(flag: Flag) -> str:
     text = flag.text.strip().rstrip(".").replace(FLAG_SEPARATOR, "; ")
-    return f"{text}. ({flag.source_type or 'source'}: {flag.source_url})"
+    kind = flag.source_type or "source"
+    if flag.snippet_verified:
+        kind = f"{kind}, {SNIPPET_VERIFIED_NOTE}"
+    return f"{text}. ({kind}: {flag.source_url})"
+
+
+def mark_snippet_verified(buyer: BuyerVerdict, snippet_fact_ids: set[str]) -> BuyerVerdict:
+    """Mark flags whose source page refused us and was verified from the search snippet."""
+    if not snippet_fact_ids:
+        return buyer
+    flags = [
+        f.model_copy(update={"snippet_verified": True}) if f.fact_id in snippet_fact_ids else f
+        for f in buyer.flags
+    ]
+    return buyer.model_copy(update={"flags": flags})
 
 
 def baseline_overall(verdict: Verdict) -> Overall:
