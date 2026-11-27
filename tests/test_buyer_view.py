@@ -287,3 +287,15 @@ def test_buyer_only_collectors_run_only_with_the_categoriser(settings) -> None:
     on = settings.model_copy(update={"buyer_categorise": True})
     assert "corporate" in orchestrator.collectors_after_site(on)
     assert "identity" in orchestrator.collectors_after_site(settings)
+
+
+async def test_vet_credits_never_reads_usage_from_the_cache(router_fetcher) -> None:
+    from vet.tavily import Tavily
+
+    usage = '{"key": {"usage": 5, "limit": null}, "account": {"plan_usage": 5, "plan_limit": 9}}'
+    fetcher, rec = router_fetcher([("api.tavily.com/usage", usage)])
+    async with fetcher:
+        tavily = Tavily(fetcher.settings, fetcher)
+        assert await tavily.usage() == (5, 9)
+        assert await tavily.usage() == (5, 9)
+    assert len([r for r in rec.requests if r.url.path == "/usage"]) == 2  # both went out

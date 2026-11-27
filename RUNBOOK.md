@@ -31,9 +31,11 @@ product (2,500 are reserved).
 uv run vet credits --products 20       # prints used, left, and products covered per depth
 ```
 
-The traffic light comes from the **baseline mapping** of the two-axis verdict by default (on the
-dev set the categorised view tied it, 6/12 each; on the holdout it was 5/12 vs 4/12 with better
-Red recall). To use the categorised view instead (corporate searches + categoriser; about 4–6
+The traffic light comes from the **baseline mapping** of the two-axis verdict by default
+(`VET_BUYER_CATEGORISE=false`). After the last tuning round (licensing confusion is context,
+never a Yellow driver) the categorised view scored 22/40 against the baseline's 19/40, with Red
+recall 4/10 against 2/10, but it kept 6 of 14 Greens against the baseline's 7. The decision rule
+required at least as many Greens kept, so the categoriser stays off. To use the categorised view instead (corporate searches + categoriser; about 4–6
 more searches per product), set in `.env`:
 
 ```bash
