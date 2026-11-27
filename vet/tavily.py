@@ -19,6 +19,7 @@ from vet.sources import is_search_tool_url
 logger = logging.getLogger(__name__)
 
 TAVILY_SEARCH_URL = "https://api.tavily.com/search"
+TAVILY_USAGE_URL = "https://api.tavily.com/usage"
 DEFAULT_MAX_RESULTS = 5
 
 
@@ -38,6 +39,12 @@ class Tavily:
         self._headers = {"Authorization": f"Bearer {settings.tavily_api_key.get_secret_value()}"}
         # url -> snippet content; the verifier may use these for snippet-only domains.
         self.snippets: dict[str, str] = {}
+
+    async def usage(self) -> tuple[int, int | None]:
+        """(credits used, credit limit). The key's own limit when it has one, else the account
+        plan's. Never cached: credits change."""
+        data = await self._fetcher.get_json(TAVILY_USAGE_URL, headers=self._headers, refresh=True)
+        return parse_usage(data)
 
     async def search(
         self,
@@ -93,3 +100,15 @@ class Tavily:
             if r.content:
                 self.snippets[r.url] = r.content
         return results
+
+
+def parse_usage(data: Any) -> tuple[int, int | None]:
+    key = data.get("key") if isinstance(data, dict) else None
+    account = data.get("account") if isinstance(data, dict) else None
+    if isinstance(key, dict) and key.get("limit") is not None:
+        return int(key.get("usage") or 0), int(key["limit"])
+    if isinstance(account, dict) and account.get("plan_limit") is not None:
+        return int(account.get("plan_usage") or 0), int(account["plan_limit"])
+    if isinstance(key, dict) and "usage" in key:
+        return int(key["usage"] or 0), None
+    raise ValueError("unexpected /usage answer from Tavily")

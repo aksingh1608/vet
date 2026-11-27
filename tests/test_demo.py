@@ -221,7 +221,7 @@ def test_demo_validates_the_verdict_file_like_vet_run(
     tmp_path, settings, monkeypatch, no_network, out
 ) -> None:
     # record()'s finding links to javascript:, which the verdict-file check rejects.
-    async def fake_run_many(urls, s, git_sha, run_id=None):  # noqa: ANN001
+    async def fake_run_many(urls, s, git_sha, run_id=None, run_dir=None):  # noqa: ANN001
         return run_id or "same-run", [record()], [Trace(product_url="https://acme.example/")]
 
     monkeypatch.setattr(demo, "run_many", fake_run_many)

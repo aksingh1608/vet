@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 from pydantic import BaseModel, ConfigDict, Field, SecretStr
 
 from vet import __version__
-from vet.schemas import RealAlive, Trust
+from vet.schemas import Overall, RealAlive, Trust
 
 DEFAULT_JUDGE_MODEL = "claude-opus-5-5"
 DEFAULT_FAST_MODEL = "claude-haiku-5-5"
@@ -24,8 +24,21 @@ DEFAULT_MAX_RETRIES = 2
 DEFAULT_BACKOFF_BASE_S = 1.0
 DEFAULT_MAX_PARALLEL_PRODUCTS = 4  # fewer products sharing the Wayback limit at once
 DEFAULT_BREACH_RECENT_YEARS = 3
-OutputFormat = Literal["json", "csv"]
-OUTPUT_FORMATS: tuple[str, ...] = ("json", "csv")
+OutputFormat = Literal["json", "csv", "stackgini"]
+OUTPUT_FORMATS: tuple[str, ...] = ("json", "csv", "stackgini")
+# Columns of the stackgini verdict file, until the organiser confirms them (VET_STACKGINI_COLUMNS,
+# a comma-separated list). "action" is available as an extra column.
+DEFAULT_STACKGINI_COLUMNS: tuple[str, ...] = (
+    "id",
+    "url",
+    "product",
+    "vendor",
+    "overall",
+    "green_flags",
+    "yellow_flags",
+    "red_flags",
+    "reasoning",
+)
 
 TAVILY_CREDITS_BASIC = 1
 TAVILY_CREDITS_ADVANCED = 2
@@ -60,7 +73,7 @@ DEFAULT_HOST_POLICIES: dict[str, HostPolicy] = {
     "crt.sh": HostPolicy(min_interval_s=15.0, max_retries=0, timeout_s=20.0),  # <= 4/min, 1 try
     "api.company-information.service.gov.uk": HostPolicy(min_interval_s=0.6),  # <= 100/min
     "haveibeenpwned.com": HostPolicy(min_interval_s=2.0),  # 1 per 2 s
-    "api.tavily.com": HostPolicy(min_interval_s=0.25),
+    "api.tavily.com": HostPolicy(min_interval_s=0.6),  # <= 100/min across all keys
 }
 
 # Never fetched directly. Pages on these domains are found via Tavily and quoted from the Tavily
@@ -127,7 +140,7 @@ class Settings(BaseModel):
     # Labels are decided in code from these cut-offs (VET_LABEL_THRESHOLDS, JSON object).
     label_thresholds: LabelThresholds = Field(default_factory=LabelThresholds)
 
-    # Verdict file format for the organiser ("json" or "csv").
+    # Verdict file format for the organiser ("json", "csv" or "stackgini").
     output_format: OutputFormat = "json"
     # Labelled-set loader: our field name -> column/key name in the organiser's file.
     label_columns: dict[str, str] = Field(
@@ -137,7 +150,13 @@ class Settings(BaseModel):
             "trust": "trust",
             "reasons": "reasons",
             "note": "note",
+            "overall": "overall",
+            "id": "id",
         }
+    )
+    stackgini_columns: list[str] = Field(default_factory=lambda: list(DEFAULT_STACKGINI_COLUMNS))
+    overall_labels: dict[Overall, str] = Field(
+        default_factory=lambda: {v: v.value.capitalize() for v in Overall}
     )
 
     contact: str = ""
@@ -190,6 +209,9 @@ class Settings(BaseModel):
             if raw:
                 values[field] = raw.lower() if field == "output_format" else raw
 
+        columns = os.environ.get("VET_STACKGINI_COLUMNS", "").strip()
+        if columns:
+            values["stackgini_columns"] = [c.strip() for c in columns.split(",") if c.strip()]
         thresholds = _json_env("VET_LABEL_THRESHOLDS")
         if thresholds:
             values["label_thresholds"] = thresholds

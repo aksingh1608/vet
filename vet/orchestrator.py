@@ -10,20 +10,29 @@ import asyncio
 import logging
 import time
 import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
 from vet import trace
+from vet.buyer_view import baseline_view, failed_view
 from vet.claims_check import check_claims
 from vet.collectors import age, alive, footprint, legal_id, looks, risk
-from vet.collectors.base import Collector, CollectorResult, Context, run_collector
+from vet.collectors.base import (
+    Collector,
+    CollectorResult,
+    Context,
+    SiteIdentity,
+    run_collector,
+)
 from vet.config import Settings
 from vet.fetch import Fetcher
 from vet.judge import judge, relabel_after_verification
 from vet.llm import LLM, LLMCache, StructuredLLM
-from vet.output import ProductRecord
-from vet.schemas import Verdict
+from vet.output import InputRow, ProductRecord, write_record
+from vet.schemas import RealAlive, Trust, Verdict
 from vet.site_reader import SiteReport, read_site
 from vet.tavily import Tavily
 from vet.text import registered_domain
@@ -93,7 +102,19 @@ async def _site(ctx: Context, timeout_s: float) -> tuple[SiteReport | None, Coll
     return report, CollectorResult(name="site_reader", facts=facts, seconds=seconds, error=error)
 
 
-async def run_product(url: str, deps: Deps) -> tuple[ProductRecord, trace.Trace]:
+def not_checked(results: list[CollectorResult], report: SiteReport | None) -> list[str]:
+    """What we could not read, and why, in words a buyer understands (our problem, not the
+    vendor's)."""
+    out = [f"{r.name} ({r.error})" for r in results if r.error]
+    if report is not None:
+        out += [e for e in report.errors if any(k in e for k in ("403", "robots", "timed out"))]
+    return out[:5]
+
+
+async def run_product(
+    url: str, deps: Deps, row: InputRow | None = None
+) -> tuple[ProductRecord, trace.Trace]:
+    row = row or InputRow(url=url)
     url = normalize_url(url)
     t = trace.Trace(product_url=url)
     trace.set_current(t)
@@ -205,6 +226,15 @@ async def run_product(url: str, deps: Deps) -> tuple[ProductRecord, trace.Trace]
     errors = [f"{r.name}: {r.error}" for r in results if r.error]
     if report is not None:
         errors += report.errors
+    buyer = baseline_view(
+        verdict,
+        facts,
+        not_checked(results, report),
+        input_id=row.id,
+        product=row.product or ctx.identity.product_name,
+        vendor=row.vendor or ctx.identity.vendor_name,
+        url=row.url,
+    )
     record = ProductRecord(
         verdict=verdict,
         identity=ctx.identity,
@@ -219,15 +249,80 @@ async def run_product(url: str, deps: Deps) -> tuple[ProductRecord, trace.Trace]
         usage=t.usage,
         seconds=seconds,
         errors=errors,
+        buyer=buyer,
+        input=row,
     )
     trace.set_current(None)
     return record, t
 
 
+def failed_record(row: InputRow, deps: Deps, error: str, seconds: float) -> ProductRecord:
+    """A product whose run raised: unclear / caution, buyer view Yellow, says what failed."""
+    url = normalize_url(row.url)
+    verdict = Verdict(
+        product_url=url,
+        real_alive=RealAlive.UNCLEAR,
+        trust=Trust.CAUTION,
+        confidence=0.0,
+        summary=f"The run failed before a verdict could be reached ({error[:160]}).",
+        reasons=[],
+        findings=[],
+        run_id=deps.run_id,
+        git_sha=deps.git_sha,
+        model=deps.model,
+        created_at=datetime.now(UTC),
+    )
+    return ProductRecord(
+        verdict=verdict,
+        identity=SiteIdentity(),
+        claims=[],
+        facts=[],
+        collectors=[],
+        verification=[],
+        judge_notes=[f"run failed: {error}"],
+        used_llm_judge=False,
+        usage=trace.Usage(),
+        seconds=seconds,
+        errors=[f"run: {error}"],
+        buyer=failed_view(row.url, error, input_id=row.id, product=row.product, vendor=row.vendor),
+        input=row,
+    )
+
+
+async def run_product_safe(
+    row: InputRow, deps: Deps, run_dir: Path | None = None
+) -> tuple[ProductRecord, trace.Trace]:
+    """run_product that never raises (except cancellation). The record is written to
+    ``run_dir/products/`` as soon as the product is done, so a crash later loses nothing."""
+    started = time.monotonic()
+    try:
+        record, t = await run_product(row.url, deps, row)
+    except Exception as exc:  # noqa: BLE001 - one product must never end the batch
+        logger.exception("product %s failed; writing a fallback record", row.url)
+        trace.set_current(None)
+        error = f"{type(exc).__name__}: {exc}"
+        record = failed_record(row, deps, error, round(time.monotonic() - started, 1))
+        t = trace.Trace(product_url=normalize_url(row.url))
+        t.emit({"event": "product_failed", "error": error})
+    if run_dir is not None:
+        try:
+            await asyncio.to_thread(write_record, run_dir, record)
+        except OSError:
+            logger.exception("could not save the record for %s", row.url)
+    return record, t
+
+
 async def run_many(
-    urls: list[str], settings: Settings, git_sha: str, run_id: str | None = None
+    urls: Sequence[str | InputRow],
+    settings: Settings,
+    git_sha: str,
+    run_id: str | None = None,
+    run_dir: Path | None = None,
 ) -> tuple[str, list[ProductRecord], list[trace.Trace]]:
+    """Run every input, at most ``max_parallel_products`` at once. One product failing never
+    ends the batch. With ``run_dir``, each record is saved the moment it is done."""
     run_id = run_id or new_run_id()
+    rows = [u if isinstance(u, InputRow) else InputRow(url=u) for u in urls]
     llm = LLM(settings, cache=LLMCache(settings.cache_path) if settings.llm_cache else None)
     sem = asyncio.Semaphore(settings.max_parallel_products)
     async with Fetcher(settings) as fetcher:
@@ -240,9 +335,9 @@ async def run_many(
             model=f"{settings.judge_model} + {settings.fast_model}",
         )
 
-        async def one(u: str) -> tuple[ProductRecord, trace.Trace]:
+        async def one(row: InputRow) -> tuple[ProductRecord, trace.Trace]:
             async with sem:
-                return await run_product(u, deps)
+                return await run_product_safe(row, deps, run_dir)
 
-        pairs = await asyncio.gather(*(one(u) for u in urls))
+        pairs = await asyncio.gather(*(one(r) for r in rows))
     return run_id, [p[0] for p in pairs], [p[1] for p in pairs]
