@@ -111,3 +111,11 @@ def extract_links(raw_html: str, base_url: str) -> list[tuple[str, str]]:
 
 def truncate(text: str, limit: int) -> str:
     return text if len(text) <= limit else text[:limit] + " …"
+
+
+def normalize_url(url: str) -> str:
+    """https:// added when missing, host lower-cased, path at least "/", fragment dropped."""
+    url = url.strip()
+    if not url.startswith(("http://", "https://")):
+        url = f"https://{url}"
+    return clean_url(url)

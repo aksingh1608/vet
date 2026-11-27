@@ -14,7 +14,6 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from urllib.parse import urlsplit, urlunsplit
 
 from vet import trace
 from vet.buyer_view import baseline_view, failed_view
@@ -46,7 +45,7 @@ from vet.output import InputRow, ProductRecord, write_record
 from vet.schemas import RealAlive, Trust, Verdict
 from vet.site_reader import SiteReport, read_site
 from vet.tavily import Tavily
-from vet.text import registered_domain
+from vet.text import normalize_url, registered_domain
 from vet.verify import verify_and_select
 
 logger = logging.getLogger(__name__)
@@ -84,14 +83,6 @@ class Deps:
     run_id: str
     git_sha: str
     model: str
-
-
-def normalize_url(url: str) -> str:
-    url = url.strip()
-    if not url.startswith(("http://", "https://")):
-        url = f"https://{url}"
-    parts = urlsplit(url)
-    return urlunsplit((parts.scheme, parts.netloc.lower(), parts.path or "/", parts.query, ""))
 
 
 def new_run_id() -> str:

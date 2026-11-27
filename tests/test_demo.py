@@ -188,7 +188,7 @@ def test_demo_live_runs_the_pipeline_and_writes_the_run(
     assert result.exit_code == 0, result.output
     assert calls == [["acme.example"]]
     run_dir = tmp_path / "runs" / "demo-run"
-    assert (run_dir / "verdicts.json").exists()
+    assert (run_dir / "stackgini.csv").exists()  # the default verdict file
     assert (run_dir / "products" / "acme.example.json").exists()
     assert (run_dir / cli.REPORT_DIR).is_dir()
     shown = out.export_text()
@@ -239,4 +239,5 @@ def test_demo_validates_the_verdict_file_like_vet_run(
     from_demo = problems(["demo", "acme.example"])
     from_run = problems(["run", "acme.example"])
     assert from_demo == from_run
-    assert from_demo == ["✗ verdict 0 (https://acme.example/): finding 0 has no openable link"]
+    # stackgini is the default format: the javascript: finding becomes a flag without a link.
+    assert from_demo == ["✗ row 1 (https://acme.example/) yellow_flags: flag 1 link is not http(s)"]

@@ -173,7 +173,7 @@ class Settings(BaseModel):
     label_thresholds: LabelThresholds = Field(default_factory=LabelThresholds)
 
     # Verdict file format for the organiser ("json", "csv" or "stackgini").
-    output_format: OutputFormat = "json"
+    output_format: OutputFormat = "stackgini"  # confirmed by the organiser: CSV, one row per input
     # Labelled-set loader: our field name -> column/key name in the organiser's file.
     label_columns: dict[str, str] = Field(
         default_factory=lambda: {
