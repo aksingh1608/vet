@@ -1,9 +1,9 @@
 """One product, end to end, inside a time budget.
 
 age starts at once (domain only) in parallel with the site reader; legal_id, footprint, risk,
-alive, looks and identity start when the site has been read. Collectors that are still running
-when the collection deadline passes are cancelled and recorded as timed out. Then
-claims_check, the judge, verification and reason selection always run.
+alive, looks, identity and archive start when the site has been read. Collectors that are
+still running when the collection deadline passes are cancelled and recorded as timed out.
+Then claims_check, the judge, verification and reason selection always run.
 """
 
 import asyncio
@@ -19,7 +19,7 @@ from urllib.parse import urlsplit, urlunsplit
 from vet import trace
 from vet.buyer_view import baseline_view, failed_view
 from vet.claims_check import check_claims
-from vet.collectors import age, alive, footprint, identity, legal_id, looks, risk
+from vet.collectors import age, alive, archive, footprint, identity, legal_id, looks, risk
 from vet.collectors.base import (
     Collector,
     CollectorResult,
@@ -51,6 +51,7 @@ AFTER_SITE: dict[str, Collector] = {
     "alive": alive.collect,
     "looks": looks.collect,
     "identity": identity.collect,
+    "archive": archive.collect,
 }
 
 
