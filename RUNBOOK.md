@@ -52,6 +52,33 @@ VET_TRUST_LABELS={"trust": "...", "caution": "...", "do_not_trust": "..."}
 
 Then run `uv run vet validate runs/<smoke-test-id>` to confirm the labels map.
 
+## 19:00 Blind round: exact steps (organiser rule: verdicts in the public repo by 19:45)
+
+The organiser sends 10 products as a CSV with `id,url,product,vendor`. They grade the repo as it
+is at 19:45, so `stackgini-verdicts.csv` must be merged on `main` before then.
+
+```bash
+cd ~/vet && git checkout main && git pull --ff-only      # latest fixes
+# 1. Save the email attachment as ~/blind.csv (id,url,product,vendor).
+uv run vet run --file ~/blind.csv --advanced --format stackgini
+uv run vet validate runs/<id>                            # must print ✓
+python3 -c "import csv;print(sum(1 for _ in csv.DictReader(open('runs/<id>/stackgini.csv',encoding='utf-8'))))"   # must print 10
+cp runs/<id>/stackgini.csv stackgini-verdicts.csv        # never edit it by hand
+git checkout -b results/stackgini-verdicts
+git add stackgini-verdicts.csv
+git commit -m "Blind-round verdicts (vet run <id>)"
+git push -u origin results/stackgini-verdicts
+gh pr create --base main --title "Blind-round verdicts" --body "stackgini-verdicts.csv from runs/<id>, written by vet, unedited."
+# wait for the Norma check, then:
+gh pr merge --merge                                      # before 19:40
+```
+
+If the Norma check has not started 3 minutes after the PR opens, merge anyway and add a comment
+to the PR saying so (`gh pr comment --body "Merged before the Norma check started (19:45 deadline)."`).
+If a product fails or the run is interrupted, resume with
+`--into runs/<id> --missing-only`. A failed product still gets a valid Yellow row that says
+"run failed".
+
 ## 19:00 Products arrive
 
 1. Save the organiser's list as `blind.csv` (columns `url` and, when given, `id`, `product`,

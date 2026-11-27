@@ -99,3 +99,30 @@ async def test_a_collector_that_times_out_does_not_break_the_run(
     assert errors["age"] == "" and errors["looks"] == ""
     assert {c.name for c in record.collectors} >= {"site_reader", "age", "risk", "alive", "looks"}
     assert len(record.verdict.reasons) >= 4
+
+
+async def test_blind_round_input_columns_reach_the_output_row(router_fetcher, tmp_path) -> None:
+    """The organiser's CSV has id,url,product,vendor: all four reach the verdict row."""
+    from vet.output import InputRow, buyer_to_row
+
+    routes = [("api.tavily.com", 500), *age_routes(), *site_routes()]
+    fetcher, _ = router_fetcher(routes)
+    llm = FakeLLM({_ExtractOut: extract_response, JudgeOut: judge_response, _SupportOut: support})
+    row = InputRow(url="ledgerly.example", id="B7", product="Ledgerly Books", vendor="Ledgerly Ltd")
+    async with fetcher:
+        deps = Deps(
+            settings=fetcher.settings,
+            fetcher=fetcher,
+            llm=llm,
+            run_id="test-run",
+            git_sha="abc123",
+            model="fake",
+        )
+        record, _ = await run_product(row.url, deps, row)
+    out = buyer_to_row(record, fetcher.settings)
+    assert (out["id"], out["url"], out["product"], out["vendor"]) == (
+        "B7",
+        "ledgerly.example",
+        "Ledgerly Books",
+        "Ledgerly Ltd",
+    )

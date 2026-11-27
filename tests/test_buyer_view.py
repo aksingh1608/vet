@@ -387,3 +387,44 @@ def test_flag_links_are_cleaned_or_dropped_so_the_row_stays_valid(tmp_path, stac
     row = next(csv.DictReader(io.StringIO(text, newline="")))
     assert row["red_flags"] == "None identified."  # both unusable links dropped
     assert sum("not an openable http(s) link" in r.getMessage() for r in caplog.records) == 2
+
+
+def test_vet_run_reads_id_url_product_vendor_and_keeps_ids_in_order(
+    tmp_path, stackgini, monkeypatch
+) -> None:
+    from rich.console import Console
+    from typer.testing import CliRunner
+
+    from vet import cli
+
+    seen: list[InputRow] = []
+
+    async def fake_run_product(url, deps, row=None):  # noqa: ANN001
+        seen.append(row)
+        return ok_record(row), trace.Trace(product_url=url)
+
+    monkeypatch.setattr(orchestrator, "run_product", fake_run_product)
+    monkeypatch.setattr(orchestrator, "LLM", lambda settings, cache=None: FakeLLM())
+    local = stackgini.model_copy(update={"runs_dir": tmp_path / "runs"})
+    monkeypatch.setattr(cli, "_settings", lambda advanced, fmt: local)
+    monkeypatch.setattr(cli, "console", Console(record=True, width=200, color_system=None))
+    blind = tmp_path / "blind.csv"
+    blind.write_text(
+        "id,url,product,vendor\n"
+        'B2,https://quillwork.example/,"Quillwork, Pro",Quillwork GmbH\n'
+        "B1,https://larchbase.example/,Larchbase,Larchbase Ltd\n",
+        encoding="utf-8",
+    )
+    result = CliRunner().invoke(cli.app, ["run", "--file", str(blind), "--format", "stackgini"])
+    assert result.exit_code == 0, result.output
+    assert {(r.id, r.product, r.vendor) for r in seen} == {
+        ("B2", "Quillwork, Pro", "Quillwork GmbH"),
+        ("B1", "Larchbase", "Larchbase Ltd"),
+    }
+    (run_dir,) = (tmp_path / "runs").iterdir()
+    rows = list(
+        csv.DictReader(
+            io.StringIO((run_dir / "stackgini.csv").read_text(encoding="utf-8"), newline="")
+        )
+    )
+    assert [r["id"] for r in rows] == ["B2", "B1"]  # input order, ids carried through

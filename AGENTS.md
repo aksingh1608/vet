@@ -14,6 +14,10 @@ since the spec was written.
 - Secrets only from `.env`. Never hardcode, never log keys. Commit `.env.example`, never `.env`.
 - `data/labelled/` and `runs/` are gitignored. The organiser's examples and our verdicts on their products
   are never committed or published.
+  **One narrow exception (organiser rule, 27 Nov):** the blind-round verdicts are committed as
+  `stackgini-verdicts.csv` at the repo root, exactly as the agent wrote them
+  (`runs/<id>/stackgini.csv`), never edited by hand. The labelled set, `runs/` and our verdicts
+  on the labelled products stay out of the repo as before.
 - Every network call goes through `vet/fetch.py`.
   - **Websites**: GET only, robots.txt respected, never submit forms, never log in, never contact vendors.
   - **APIs** (Tavily, RDAP, crt.sh, Wayback, HIBP, Companies House): skip robots.txt, but still go
