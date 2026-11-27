@@ -4,8 +4,10 @@ The rules the team agrees to treat as blocking for `vet`. Rule ids are copied fr
 `get_rulesets` / `get_rules_for_ruleset` output for this repository (status `linked`, repo id 12410).
 The org-scoped `Policies` ruleset currently holds 0 rules; this file is the proposal for it.
 
-Scope: page 1 of `python-norma-ruleset` (50 of 63 rules) and all 13 rules of `secrets-norma-ruleset`
-were read. Page 2 of the Python ruleset was not reviewed today (5-minute timebox).
+Scope: all 63 rules of `python-norma-ruleset` (both pages) and all 13 rules of
+`secrets-norma-ruleset` were read. Page 2 was reviewed later the same day; the code complied
+with every rule added below when they were added (the sqlite `execute()` calls use constant
+SQL with bound `?` parameters; the one `subprocess.run` call has `timeout=GIT_TIMEOUT_S`).
 
 ## Blocking (fix before merge)
 
@@ -24,6 +26,11 @@ were read. Page 2 of the Python ruleset was not reviewed today (5-minute timebox
 | `py-maint-logger-fstring-1.0` | MEDIUM | AGENTS.md: lazy `%s` formatting in log calls. |
 | `py-maint-naive-datetime-1.0` | MEDIUM | AGENTS.md: timezone-aware datetimes; domain-age maths depends on it. |
 | `py-mng-magic-timeout-1.0` | LOW | AGENTS.md: named constants for timeouts. |
+| `py-sec-dbapi-execute-fstring-1.0` | HIGH | The fetch and LLM caches are sqlite; a key built from vendor URLs must never become SQL. |
+| `py-sec-dbapi-execute-percent-1.0` | HIGH | Same reason: bound parameters only. |
+| `py-sec-dbapi-execute-concat-1.0` | HIGH | Same reason: bound parameters only. |
+| `py-scal-subprocess-no-timeout-1.0` | HIGH | The CLI calls git; a hung subprocess must not hang a live round. |
+| `py-scal-requests-no-timeout-1.0` | MEDIUM | Same intent as the HTTP-deadline rule if `requests` is ever added; we use httpx via fetch.py. |
 
 ## Advisory (fix when touched, accept with a reason in findings.md)
 
@@ -33,3 +40,9 @@ were read. Page 2 of the Python ruleset was not reviewed today (5-minute timebox
 | `py-maint-else-after-return-1.0` | HIGH | Readability only; not worth churn in stable code. |
 | `py-mng-open-no-encoding-1.0` | LOW | Cheap to fix; we read and write UTF-8 CSV and JSON. |
 | `py-maint-legacy-typing-1.0` | MEDIUM | Python 3.12 builtin generics; ruff already enforces most of it. |
+| `py-scal-mutable-class-attr-1.0` | HIGH | Shared state across products running in parallel would leak between verdicts. |
+| `py-scal-lru-on-self-1.0` | HIGH | Long batch runs; caches must not pin objects. We cache in sqlite instead. |
+| `py-perf-double-lookup-1.0` | LOW | Fixed once already (vet/verify.py); cheap to keep clean. |
+| `py-perf-string-concat-loop-1.0` | MEDIUM | Flag cells and reports are joined with `" \| ".join(...)`; keep it that way. |
+| `py-perf-list-in-agg-1.0` | MEDIUM | Readability; generators in `sum`/`any`/`all`. |
+| `py-scal-deepcopy-1.0` | MEDIUM | Pydantic `model_copy` is the norm here; a deepcopy needs a reason. |
