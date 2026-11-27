@@ -56,7 +56,7 @@ It is UTF-8 CSV with one row per input product, in input order.
 | **Every reason is verified against its source.** The quote must be on the page or in the machine record, a model checks that it supports the sentence, and anything that fails is dropped. | `vet/verify.py` |
 | **Labels are decided in code, not by the model.** The model ranks fact ids; code rules decide the two axes and the traffic light. | `vet/judge.py`, `vet/buyer_view.py` |
 | **Page text is hostile input.** Hidden text and text addressed to AI are removed before any model sees a page, and the attempt itself becomes a red flag. | `vet/guard.py`, `tests/fixtures/redteam/` |
-| **Honest measurement.** Baseline vs categoriser, a holdout, and live rehearsals on unseen products. We kept the categoriser **off** because the live rehearsal failed it. | `docs/pitch-notes.md` |
+| **Honest measurement.** Baseline vs categoriser, a holdout, and live rehearsals on unseen products. We kept the categoriser **off** because the live rehearsal failed it. | [Measured results](#measured-results) |
 
 ### Input → output
 

@@ -117,7 +117,7 @@ STRONG_SOURCE_TYPES = frozenset(
 DOMAIN_DATE_TOPICS = frozenset(
     {"domain_registered", "first_certificate", "first_capture", "capture_history"}
 )
-# Registration, certificate and archive dates: an old domain can be bought (plan v3).
+# Registration, certificate and archive dates alone are no track record: a domain can be bought.
 DOMAIN_DATE_COLLECTORS = frozenset({"age"})
 # Categories about the owner by definition: a parent/owner scope does not make them context.
 OWNER_CATEGORIES = frozenset({"ownership_churn", "owner_squeeze_record"})
@@ -150,7 +150,7 @@ CATEGORY_TOPICS: dict[str, frozenset[str]] = {
     "long_track_record": frozenset({"same_vendor_since"}),
 }
 # Topics the collectors already classified: code proposes the category when the model did not.
-# corporate: regulator and sanctions events. identity (Step 5): vendor-page contradictions.
+# corporate: regulator and sanctions events. identity: contradictions on the vendor's own pages.
 PROPOSE_FROM_TOPIC: dict[str, str] = {
     "regulator_finding": "regulator_finding_core",
     "sanctions_exposure": "undisclosed_exposure",
@@ -158,7 +158,7 @@ PROPOSE_FROM_TOPIC: dict[str, str] = {
     "traction_inconsistent": "implausible_traction",
     "policy_as_file": "weak_trust_artefacts",
     "coming_soon": "weak_trust_artefacts",
-    # archive (Step 5, v3): read by topic; both facts are NEUTRAL with weight 0 on purpose.
+    # archive: read by topic; both facts are NEUTRAL with weight 0 on purpose.
     "same_vendor_since": "long_track_record",
     "domain_older_than_vendor": "domain_older_than_vendor",
 }

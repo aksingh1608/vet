@@ -145,6 +145,8 @@ class Settings(BaseModel):
     tavily_api_key: SecretStr | None = None
     companies_house_api_key: SecretStr | None = None
     backup_llm_api_key: SecretStr | None = None
+    # Optional: sent only to api.github.com (higher rate limit than unauthenticated calls).
+    github_token: SecretStr | None = None
 
     judge_model: str = DEFAULT_JUDGE_MODEL
     fast_model: str = DEFAULT_FAST_MODEL
@@ -230,6 +232,7 @@ class Settings(BaseModel):
             ("tavily_api_key", "TAVILY_API_KEY"),
             ("companies_house_api_key", "COMPANIES_HOUSE_API_KEY"),
             ("backup_llm_api_key", "BACKUP_LLM_API_KEY"),
+            ("github_token", "GITHUB_TOKEN"),
             ("judge_model", "JUDGE_MODEL"),
             ("fast_model", "FAST_MODEL"),
             ("product_budget_s", "VET_PRODUCT_BUDGET_S"),

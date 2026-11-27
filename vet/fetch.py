@@ -37,6 +37,7 @@ logger = logging.getLogger(__name__)
 ROBOTS_AGENT = "vet"
 RETRYABLE_STATUSES = frozenset({429, 500, 502, 503, 504})
 MAX_RETRY_AFTER_S = 10.0
+GITHUB_API_HOST = "api.github.com"  # the only host that receives GITHUB_TOKEN
 
 Clock = Callable[[], float]
 Sleep = Callable[[float], Awaitable[None]]
@@ -327,6 +328,14 @@ class Fetcher:
             parser.disallow_all = True
         return parser
 
+    def _auth_headers(self, host: str, headers: dict[str, str] | None) -> dict[str, str] | None:
+        """Add the GitHub token for api.github.com only. Request headers are never cached,
+        logged or traced, and the cache key does not include them."""
+        token = self.settings.github_token
+        if host != GITHUB_API_HOST or token is None or not token.get_secret_value():
+            return headers
+        return {**(headers or {}), "Authorization": f"Bearer {token.get_secret_value()}"}
+
     async def _request(
         self,
         method: str,
@@ -363,6 +372,7 @@ class Fetcher:
         if policy is not None and policy.timeout_s is not None:
             timeout = httpx.Timeout(policy.timeout_s, connect=self.settings.connect_timeout_s)
         extra = {"timeout": timeout} if timeout is not None else {}
+        headers = self._auth_headers(host, headers)
         last_error: Exception | None = None
         for attempt in range(max_retries + 1):
             await self.limiter.wait(host)
