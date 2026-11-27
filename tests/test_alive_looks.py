@@ -90,3 +90,42 @@ def test_looks_facts_are_low_weight_filler() -> None:
     docs = [page("docs", status=404), page("docs", status=200)]
     dead = looks.dead_help_fact(docs, NOW)
     assert dead is not None and "1 of 2" in dead.statement
+
+
+def test_newest_changelog_date_comes_from_the_whole_page_not_the_main_text() -> None:
+    from vet.collectors.alive import page_date_facts
+    from vet.collectors.base import SitePage
+
+    raw = (
+        "<html><body><main>"
+        "<h2>Nov 2, 2026</h2><p>Funnels without goals.</p>"
+        "<h2>Sep 9, 2026</h2><p>Compare funnels.</p>"
+        "<p>Since 1 March 2025 exports include custom properties.</p>"
+        '<div style="display:none">Dec 31, 2099 Nov 20, 2026</div>'
+        "</main></body></html>"
+    )
+    # What a main-text extractor may keep: the entry body, without the dated headings.
+    page = SitePage(
+        kind="changelog",
+        url="https://acme-tools.example/changelog",
+        text="Since 1 March 2025 exports include custom properties.",
+        raw=raw,
+    )
+    (fact,) = page_date_facts([page], datetime(2026, 11, 27, tzinfo=UTC))
+    assert "Nov 2, 2026" in fact.statement
+    assert fact.quote == "Nov 2, 2026"
+    assert fact.topic != "frozen"
+
+
+def test_archived_changelog_ignores_the_archive_toolbar_dates() -> None:
+    from vet.collectors.alive import dated_text
+    from vet.collectors.base import SitePage
+
+    page = SitePage(
+        kind="changelog",
+        url="https://acme-tools.example/changelog",
+        text="Release of 1 March 2025.",
+        raw="<div id='wm-toolbar'>Nov 20, 2026</div><p>Release of 1 March 2025.</p>",
+        archived="2026-11-20",
+    )
+    assert dated_text(page) == "Release of 1 March 2025."
