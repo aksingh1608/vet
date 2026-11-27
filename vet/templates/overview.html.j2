@@ -1,0 +1,63 @@
+{% extends "base.html.j2" %}
+{% block title %}vet overview {{ run_id }}{% endblock %}
+{% block style %}
+  .summary { display: flex; flex-wrap: wrap; gap: 28px; align-items: center; }
+  .summary svg { max-width: 100%; height: auto; }
+  .bar-green { fill: var(--good); } .bar-yellow { fill: #d99a00; } .bar-red { fill: var(--bad); }
+  .bar-label, .bar-count { font: 700 17px system-ui, -apple-system, "Segoe UI", Roboto, Arial,
+                           sans-serif; fill: var(--ink); }
+  .total { font-size: 44px; font-weight: 800; line-height: 1; }
+  .light { display: inline-block; width: 14px; height: 14px; border-radius: 50%;
+           margin-right: 8px; vertical-align: -1px; background: var(--muted); }
+  .pill.green { background: var(--good-bg); color: var(--good); }
+  .pill.green .light { background: var(--good); }
+  .pill.yellow { background: var(--warn-bg); color: var(--warn); }
+  .pill.yellow .light { background: #d99a00; }
+  .pill.red { background: var(--bad-bg); color: var(--bad); }
+  .pill.red .light { background: var(--bad); }
+  td.url { word-break: break-all; }
+  td.flag { font-size: 17px; }
+  .who { display: block; font-size: 15px; color: var(--muted); }
+{% endblock %}
+{% block body %}
+<h1>Batch overview</h1>
+<p class="muted">Run {{ run_id }} &middot; {{ run_date }} &middot; from {{ source }}</p>
+
+<section class="card summary" aria-label="Traffic lights">
+  <div>
+    <div class="total">{{ total }}</div>
+    <div class="muted">product{{ "" if total == 1 else "s" }}</div>
+  </div>
+  <svg role="img" width="{{ chart_width }}" height="{{ chart_height }}"
+       viewBox="0 0 {{ chart_width }} {{ chart_height }}"
+       aria-label="{% for b in bars %}{{ b.label }}: {{ b.count }}{{ ", " if not loop.last }}{% endfor %}">
+    <title>{% for b in bars %}{{ b.label }}: {{ b.count }}{{ ", " if not loop.last }}{% endfor %}</title>
+    {% for b in bars %}
+    <text class="bar-label" x="0" y="{{ b.y + bar_height * 0.68 }}">{{ b.label }}</text>
+    <rect class="bar-{{ b.overall.value }}" x="{{ label_width }}" y="{{ b.y }}"
+          width="{{ b.width }}" height="{{ bar_height }}" rx="6"></rect>
+    <text class="bar-count" x="{{ label_width + b.width + 10 }}" y="{{ b.y + bar_height * 0.68 }}">{{ b.count }}</text>
+    {% endfor %}
+  </svg>
+</section>
+
+<h2>Products</h2>
+<table>
+  <tr><th>Light</th><th>Product</th><th>First flag of its colour</th><th>Report</th></tr>
+  {% for r in rows %}
+  <tr>
+    <td><span class="pill {{ r.overall.value if r.overall else '' }}"><span class="light"></span>{{ r.label }}</span></td>
+    <td class="url">
+      {% if r.url_ok %}<a href="{{ r.url }}" rel="noopener noreferrer nofollow">{{ r.url }}</a>{% else %}{{ r.url }}{% endif %}
+      {% if r.product or r.vendor %}<span class="who">{{ r.product }}{{ " · " if r.product and r.vendor }}{{ r.vendor }}</span>{% endif %}
+    </td>
+    <td class="flag">
+      {% if r.flag_text %}{{ r.flag_text }}
+        {% if r.flag_url_ok %} <a href="{{ r.flag_url }}" rel="noopener noreferrer nofollow">source &#8599;</a>{% endif %}
+      {% else %}<span class="muted">None identified.</span>{% endif %}
+    </td>
+    <td>{% if r.report_href %}<a href="{{ r.report_href }}">report</a>{% else %}<span class="muted">&mdash;</span>{% endif %}</td>
+  </tr>
+  {% endfor %}
+</table>
+{% endblock %}
