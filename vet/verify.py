@@ -264,7 +264,7 @@ async def verify_facts(
 
 # Facts whose sentence the model wrote from a quote. If the sentence overclaims but the quote
 # is verified, the reason falls back to the quote itself, attributed to its site.
-QUOTE_FALLBACK_COLLECTORS = frozenset({"footprint", "risk", "legal_id"})
+QUOTE_FALLBACK_COLLECTORS = frozenset({"footprint", "risk", "legal_id", "corporate"})
 
 
 def quoted_statement(fact: Fact) -> str:

@@ -167,10 +167,10 @@ def failed_view(
         action=ACTIONS[Overall.YELLOW],
         categories=["not_enough_evidence"],
         reasoning=(
-            "Yellow: the automated review of this product failed before any evidence could be "
-            "weighed, so no call can be made either way. Buyer action: rerun the review, then "
-            f"check ownership, incidents and regulator records by hand. Not checked: all "
-            f"sources ({error[:160]})."
+            f"Yellow: run failed: {error[:160]}. The automated review stopped before any "
+            "evidence could be weighed, so no call can be made either way. Buyer action: rerun "
+            "the review, then check ownership, incidents and regulator records by hand. "
+            "Not checked: all sources (the run failed)."
         ),
         method="failed",
         not_checked=["all sources"],

@@ -8,9 +8,22 @@ as evidence. A redundant `else` after a `raise` put its normal path one level de
 to be. The loop was rewritten with an early `continue`, and `live_check` is clean again.
 
 ## Accepted
-Rule: TODO: pending the Norma dashboard scan
-File: TODO: pending the Norma dashboard scan
-Why we left it: TODO: pending the Norma dashboard scan
+Rule: `error-handling-layer-1.0` (High), "A failure is caught and nobody ever finds out". Raised
+by the Norma AI scan of `main` after PR #13.
+File: `vet/orchestrator.py`, `run_product_safe` (the `except Exception` around one product's run).
+Why we left it: the catch is the batch-survival design. One product that raises must never stop
+the batch: before PR #13 one API error on one product could end the whole run with nothing
+saved. We keep the catch and make sure the failure is never silent. A failed product is
+surfaced in five places, each checked by `tests/test_buyer_view.py::test_a_failed_product_is_visible_everywhere`:
+1. `logger.exception` at ERROR level, naming the product and the exception type, with the
+   traceback;
+2. a `product_failed` event with the error in the run's `trace.jsonl`;
+3. the record's `errors` list (`run: <ExceptionType>: <message>`);
+4. the buyer-view row: Yellow, reasoning starting "Yellow: run failed: <ExceptionType>: ..." and
+   ending "Not checked: all sources (the run failed).";
+5. the `vet run` / `vet eval` summary, which prints "N of M products failed" and lists each one.
+Cancellation is not caught (`asyncio.CancelledError` is not an `Exception`), so stopping a run
+still stops it.
 
 ## Conflict between authors
 Authors: Aryan Kumar Singh (with Claude Code) and Saurabh Kumar (with Claude Code)

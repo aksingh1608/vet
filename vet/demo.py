@@ -21,7 +21,13 @@ from rich.text import Text
 
 from vet import trace
 from vet.config import Settings
-from vet.orchestrator import AFTER_SITE, normalize_url, run_many
+from vet.orchestrator import (
+    AFTER_SITE,
+    BUYER_ONLY_COLLECTORS,
+    collectors_after_site,
+    normalize_url,
+    run_many,
+)
 from vet.output import TRACE_FILE, ProductRecord, product_slug
 from vet.report import safe_url
 from vet.schemas import Polarity, RealAlive, Trust
@@ -29,7 +35,8 @@ from vet.schemas import Polarity, RealAlive, Trust
 SITE_STEP = "site_reader"
 AGE_STEP = "age"
 JUDGE_STEP = "judge + verify"
-COLLECTOR_STEPS = [SITE_STEP, AGE_STEP, *AFTER_SITE]
+# Default steps: the buyer-only collectors run only with VET_BUYER_CATEGORISE=true.
+COLLECTOR_STEPS = [SITE_STEP, AGE_STEP, *(k for k in AFTER_SITE if k not in BUYER_ONLY_COLLECTORS)]
 LIVE_REFRESH_PER_S = 12
 
 RUNNING, OK, FAILED, WAITING = "running", "ok", "failed", "waiting"
@@ -131,6 +138,10 @@ class Progress:
         return table
 
 
+OVERALL_STYLE = {"green": "green", "yellow": "yellow", "red": "red"}
+MAX_PANEL_FLAGS = 6
+
+
 def verdict_panel(record: ProductRecord) -> Panel:
     """The closing panel: product, both calls in colour, reasons with their links.
 
@@ -150,7 +161,18 @@ def verdict_panel(record: ProductRecord) -> Panel:
     calls.append(f" {v.trust.value} ", style=f"reverse {TRUST_STYLE[v.trust]}")
     calls.append(f"   confidence {v.confidence:.2f}", style="dim")
 
-    parts: list[RenderableType] = [header, calls]
+    parts: list[RenderableType] = [header]
+    if record.buyer is not None:
+        light = Text()
+        light.append(
+            f" {record.buyer.overall.value.upper()} ",
+            style=f"reverse {OVERALL_STYLE[record.buyer.overall.value]}",
+        )
+        light.append(f"  buyer action: {record.buyer.action}", style="bold")
+        parts += [light, Text(record.buyer.reasoning)]
+        for flag in record.buyer.flags[:MAX_PANEL_FLAGS]:
+            parts.append(Text(f"[{flag.colour.value}] {flag.text}  {flag.source_url}"))
+    parts.append(calls)
     if v.summary:
         parts.append(Text(v.summary, style="italic"))
     parts.append(Text("Reasons", style="bold underline"))
@@ -219,7 +241,7 @@ def run_live(
     url: str, settings: Settings, git_sha: str, console: Console
 ) -> tuple[str, list[ProductRecord], list[trace.Trace]]:
     """Run the normal pipeline on one product, showing collector progress as it happens."""
-    progress = Progress()
+    progress = Progress([SITE_STEP, AGE_STEP, *collectors_after_site(settings)])
     token = trace.set_listener(progress.handle)
     try:
         with Live(progress, console=console, refresh_per_second=LIVE_REFRESH_PER_S):

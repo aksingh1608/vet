@@ -40,6 +40,8 @@ DEFAULT_STACKGINI_COLUMNS: tuple[str, ...] = (
     "reasoning",
 )
 
+DEFAULT_REGULATOR_RECENT_YEARS = 6  # an assumption, not from the labelled data
+
 TAVILY_CREDITS_BASIC = 1
 TAVILY_CREDITS_ADVANCED = 2
 
@@ -55,6 +57,36 @@ class LabelThresholds(BaseModel):
     real_alive_no_at_or_below: float = -0.5
     trust_above: float = 0.3
     do_not_trust_at_or_below: float = -0.5
+
+
+class CategoryRule(BaseModel):
+    """Evidence setting for one buyer-view category (VET_CATEGORY_RULES, JSON object)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    min_facts: int = 1
+    needs_strong_source: bool = False
+
+
+RED_CATEGORY_NAMES: tuple[str, ...] = (
+    "regulator_finding_core",
+    "undisclosed_exposure",
+    "discontinued",
+    "misleading_social_proof",
+    "governance_gap_regulated",
+    "no_entity_plus_claims",
+    "not_real_or_dead",
+)
+# RED categories need a strong source by default; statements against interest are exempt in code.
+# Exception: the identity audit's RED categories are contradictions ON the vendor's own pages
+# (a "trusted by" wall of badges, no legal entity behind big traction claims), observed by code
+# with the quote on the page. No third party is needed to see them.
+VENDOR_PAGE_RED_CATEGORIES: tuple[str, ...] = ("misleading_social_proof", "no_entity_plus_claims")
+DEFAULT_CATEGORY_RULES: dict[str, CategoryRule] = {
+    "_default": CategoryRule(),
+    **{name: CategoryRule(needs_strong_source=True) for name in RED_CATEGORY_NAMES},
+    **{name: CategoryRule(needs_strong_source=False) for name in VENDOR_PAGE_RED_CATEGORIES},
+}
 
 
 class HostPolicy(BaseModel):
@@ -154,6 +186,13 @@ class Settings(BaseModel):
             "id": "id",
         }
     )
+    category_rules: dict[str, CategoryRule] = Field(
+        default_factory=lambda: dict(DEFAULT_CATEGORY_RULES)
+    )
+    regulator_recent_years: int = DEFAULT_REGULATOR_RECENT_YEARS
+    # Buyer view: categorise facts instead of the baseline mapping (VET_BUYER_CATEGORISE=true).
+    # Off by default: on the dev set it tied the baseline (6/12), so the baseline ships.
+    buyer_categorise: bool = False
     stackgini_columns: list[str] = Field(default_factory=lambda: list(DEFAULT_STACKGINI_COLUMNS))
     overall_labels: dict[Overall, str] = Field(
         default_factory=lambda: {v: v.value.capitalize() for v in Overall}
@@ -204,6 +243,9 @@ class Settings(BaseModel):
             ("breach_recent_years", "VET_BREACH_RECENT_YEARS"),
             ("output_format", "VET_OUTPUT_FORMAT"),
             ("llm_cache", "VET_LLM_CACHE"),
+            ("regulator_recent_years", "VET_REGULATOR_RECENT_YEARS"),
+            ("buyer_categorise", "VET_BUYER_CATEGORISE"),
+            ("max_parallel_products", "VET_MAX_PARALLEL_PRODUCTS"),
         ):
             raw = os.environ.get(var, "").strip()
             if raw:
@@ -212,6 +254,9 @@ class Settings(BaseModel):
         columns = os.environ.get("VET_STACKGINI_COLUMNS", "").strip()
         if columns:
             values["stackgini_columns"] = [c.strip() for c in columns.split(",") if c.strip()]
+        category_rules = _json_env("VET_CATEGORY_RULES")
+        if category_rules:
+            values["category_rules"] = {**DEFAULT_CATEGORY_RULES, **category_rules}
         thresholds = _json_env("VET_LABEL_THRESHOLDS")
         if thresholds:
             values["label_thresholds"] = thresholds

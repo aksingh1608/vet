@@ -14,7 +14,33 @@ grep -cE '^(ANTHROPIC|TAVILY|COMPANIES_HOUSE)_API_KEY=.+' .env   # must print 3
 uv run vet run https://basecamp.com               # smoke test, ~30 s, cached: 0 credits
 ```
 
-Set the organiser's format in `.env` as soon as they publish it (no code change needed):
+The submission is the **stackgini** format: one traffic light (Green / Yellow / Red) per input
+row with green, yellow and red flags and a reasoning. Columns default to
+`id,url,product,vendor,overall,green_flags,yellow_flags,red_flags,reasoning`; if the organiser
+confirms different columns, set them in `.env` (no code change):
+
+```bash
+VET_OUTPUT_FORMAT=stackgini
+VET_STACKGINI_COLUMNS=id,url,product,vendor,overall,green_flags,yellow_flags,red_flags,reasoning
+```
+
+Check credits before the round: the blind round at advanced depth needs about 35 credits per
+product (2,500 are reserved).
+
+```bash
+uv run vet credits --products 20       # prints used, left, and products covered per depth
+```
+
+The traffic light comes from the **baseline mapping** of the two-axis verdict by default (on the
+dev set the categorised view tied it, 6/12 each; on the holdout it was 5/12 vs 4/12 with better
+Red recall). To use the categorised view instead (corporate searches + categoriser; about 4–6
+more searches per product), set in `.env`:
+
+```bash
+VET_BUYER_CATEGORISE=true
+```
+
+The two-axis format still works as the fallback (`--format json` or `csv`):
 
 ```bash
 VET_OUTPUT_FORMAT=json                 # or csv
@@ -26,12 +52,24 @@ Then run `uv run vet validate runs/<smoke-test-id>` to confirm the labels map.
 
 ## 19:00 Products arrive
 
-1. Put one URL per line in `blind.txt` (lines starting with `#` are ignored).
+1. Save the organiser's list as `blind.csv` (columns `url` and, when given, `id`, `product`,
+   `vendor`; ids are carried through) or as `blind.txt` with one URL per line.
 2. Run everything, in parallel (4 at a time), with Tavily advanced search:
 
    ```bash
-   uv run vet run --file blind.txt --advanced
+   uv run vet run --file blind.csv --advanced --format stackgini
    ```
+
+   Each product is saved to `runs/<id>/products/` the moment it is done. If the run is
+   interrupted (crash, laptop, network), resume it; only products without a record run again:
+
+   ```bash
+   uv run vet run --file blind.csv --advanced --format stackgini --into runs/<id> --missing-only
+   ```
+
+   One product that fails never stops the batch: it gets a Yellow row whose reasoning says the
+   run failed and what was not checked. If the trace or log shows Tavily 429 answers, lower
+   parallelism to 3 (`VET_MAX_PARALLEL_PRODUCTS=3` in `.env`) and resume with `--missing-only`.
 
    Rehearsal on 26 Nov (5 unseen products, cold cache, `--advanced`): **73 s wall time,
    74 Tavily credits (12–18 per product)**, valid file, no crash. It prints a summary table
@@ -63,9 +101,13 @@ Tavily answers are cached, so a rerun only pays for searches it has not made bef
 ## 19:30 Submit
 
 ```bash
-uv run vet validate runs/<id>        # must print ✓
-ls runs/<id>/verdicts.*              # the file to submit (json or csv)
+uv run vet validate runs/<id>        # must print ✓ (one row per input, label one of three,
+                                     # every flag link http(s) and not a search tool, reasoning)
+ls runs/<id>/stackgini.csv           # the file to submit (stackgini.json is the same rows)
 ```
+
+**Fallback** if the new code misbehaves: `git checkout pre-event-stable` (the last two-axis
+version before the buyer view), rerun with `--format json`, and submit that.
 
 Submit that file. Keep the terminal output and `runs/<id>/` until the results are announced.
 The deadline is **19:45**: submit what you have at 19:35 at the latest, then rerun if time
