@@ -18,8 +18,19 @@ from urllib.parse import urlsplit, urlunsplit
 
 from vet import trace
 from vet.buyer_view import baseline_view, failed_view
+from vet.categorise import categorised_view
 from vet.claims_check import check_claims
-from vet.collectors import age, alive, archive, footprint, identity, legal_id, looks, risk
+from vet.collectors import (
+    age,
+    alive,
+    archive,
+    corporate,
+    footprint,
+    identity,
+    legal_id,
+    looks,
+    risk,
+)
 from vet.collectors.base import (
     Collector,
     CollectorResult,
@@ -52,7 +63,17 @@ AFTER_SITE: dict[str, Collector] = {
     "looks": looks.collect,
     "identity": identity.collect,
     "archive": archive.collect,
+    "corporate": corporate.collect,
 }
+# Collectors whose facts feed the buyer view only, never the two-axis judge.
+BUYER_ONLY_COLLECTORS = frozenset({"corporate"})
+
+
+def collectors_after_site(settings: Settings) -> dict[str, Collector]:
+    """Buyer-only collectors run only when the categorised buyer view is on (credits, time)."""
+    if settings.buyer_categorise:
+        return dict(AFTER_SITE)
+    return {k: v for k, v in AFTER_SITE.items() if k not in BUYER_ONLY_COLLECTORS}
 
 
 @dataclass
@@ -142,7 +163,7 @@ async def run_product(
         ctx.claims, ctx.identity, ctx.pages = report.claims, report.identity, report.pages
     # Run even when the homepage is unreadable (e.g. a WAF answers 403): search and breach
     # records need only the domain, and the domain name stands in for the vendor name.
-    for name, collect in AFTER_SITE.items():
+    for name, collect in collectors_after_site(settings).items():
         tasks[name] = asyncio.create_task(run_collector(name, collect, ctx, timeout))
     window = max(deadline - time.monotonic(), MIN_COLLECT_WINDOW_S)
     done, pending = await asyncio.wait(tasks.values(), timeout=window)
@@ -175,10 +196,11 @@ async def run_product(
             "facts": [f.id for f in check_facts],
         }
     )
+    judge_facts = [f for f in facts if f.collector not in BUYER_ONLY_COLLECTORS]
     judgement = await judge(
         deps.llm,
         ctx.claims,
-        facts,
+        judge_facts,
         claim_checks,
         settings.breach_recent_years,
         settings.label_thresholds,
@@ -188,7 +210,7 @@ async def run_product(
     snippets = tavily.snippets if tavily else {}
     selection, checks = await verify_and_select(
         ranked,
-        facts,
+        judge_facts,
         judgement.finding_fact_ids,
         deps.fetcher,
         deps.llm,
@@ -200,7 +222,7 @@ async def run_product(
     reasons = selection.reasons
     failed = {c.fact_id for c in checks if not c.passed}
     judgement = relabel_after_verification(
-        judgement, facts, failed, settings.breach_recent_years, settings.label_thresholds
+        judgement, judge_facts, failed, settings.breach_recent_years, settings.label_thresholds
     )
 
     verdict = Verdict(
@@ -237,6 +259,28 @@ async def run_product(
         vendor=row.vendor or ctx.identity.vendor_name,
         url=row.url,
     )
+    buyer_notes: list[str] = []
+    if settings.buyer_categorise:
+        try:
+            buyer, buyer_notes, extra = await categorised_view(
+                verdict=verdict,
+                facts=facts,
+                verification=checks,
+                identity=ctx.identity,
+                not_checked=buyer.not_checked,
+                llm=deps.llm,
+                fetcher=deps.fetcher,
+                snippets=snippets,
+                settings=settings,
+                base=buyer,
+                today=datetime.now(UTC),
+            )
+            checks = [*checks, *extra]
+        except Exception as exc:  # noqa: BLE001 - the baseline view is the fallback
+            logger.warning("categoriser failed for %s; baseline view kept: %s", url, exc)
+            buyer_notes = [f"categoriser failed ({type(exc).__name__}); baseline mapping used"]
+        t.emit({"event": "buyer_view", "overall": buyer.overall.value, "notes": buyer_notes})
+    seconds = round(time.monotonic() - started, 1)  # including the buyer view
     record = ProductRecord(
         verdict=verdict,
         identity=ctx.identity,
@@ -246,7 +290,7 @@ async def run_product(
         collectors=results,
         verification=checks,
         judge_notes=judgement.notes,
-        selection_notes=selection.notes,
+        selection_notes=selection.notes + buyer_notes,
         used_llm_judge=judgement.used_llm,
         usage=t.usage,
         seconds=seconds,
@@ -300,7 +344,9 @@ async def run_product_safe(
     try:
         record, t = await run_product(row.url, deps, row)
     except Exception as exc:  # noqa: BLE001 - one product must never end the batch
-        logger.exception("product %s failed; writing a fallback record", row.url)
+        logger.exception(
+            "product %s failed (%s); writing a fallback record", row.url, type(exc).__name__
+        )
         trace.set_current(None)
         error = f"{type(exc).__name__}: {exc}"
         record = failed_record(row, deps, error, round(time.monotonic() - started, 1))

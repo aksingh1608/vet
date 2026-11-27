@@ -110,3 +110,13 @@ Sources: the repo, the tests, `runs/`, `findings.md` and the commit history. Not
   - The fixed code drops these results in the Tavily client.
   - The verifier rejects any fact from a search-tool page.
   - The report's claims table hides them.
+
+## Known limits (named, not built)
+- Not detected today: a copied imprint, shelf companies, virtual-office addresses, founder
+  history, bought reviews, review blogs owned by the vendor.
+- No certification registers are queried: a SOC 2 or ISO badge is reported as a claim, never as
+  verified, and never as missing.
+- Pages are not rendered: JavaScript-only pages are read as far as their HTML goes, and a page we
+  could not read is listed under "Not checked", never held against the vendor.
+- The fetcher does not yet block redirects to private or local addresses, and it does not cap
+  response size (first fix after the event; see docs/threat-model.md).

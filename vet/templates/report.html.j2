@@ -50,9 +50,34 @@
   .tp .l { font-size: 16px; color: var(--muted); }
   .ok { color: var(--good); font-weight: 800; } .fail { color: var(--bad); font-weight: 800; }
   tr.total td { font-weight: 800; background: var(--neutral-bg); }
+  .buyer .light { display: inline-block; padding: 6px 16px; border-radius: 999px; font-weight: 800;
+    font-size: 20px; color: #fff; }
+  .buyer .light.green { background: var(--good); } .buyer .light.yellow { background: #b7791f; }
+  .buyer .light.red { background: var(--bad); }
+  .buyer ul { margin: 8px 0 0 18px; } .buyer li { margin: 4px 0; }
 {% endblock %}
 {% block body %}
 <p class="back"><a href="index.html">&larr; all products</a></p>
+
+{% if r.buyer %}
+<section class="card buyer">
+  <span class="light {{ r.buyer.overall }}">{{ r.buyer.overall | capitalize }}</span>
+  <strong>&nbsp;Buyer action: {{ r.buyer.action }}</strong>
+  <p>{{ r.buyer.reasoning }}</p>
+  {% for colour in ["red", "yellow", "green"] %}
+  {% set chosen = r.buyer.flags | selectattr("colour", "equalto", colour) | list %}
+  {% if chosen %}
+  <h3>{{ colour | capitalize }} flags</h3>
+  <ul>
+    {% for f in chosen %}
+    <li>{{ f.text }} <span class="muted">({{ f.source_type or "source" }}:
+      <a href="{{ f.source_url | safe_url }}" rel="noopener noreferrer nofollow">{{ f.source_url | domain }}</a>)</span></li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+  {% endfor %}
+</section>
+{% endif %}
 
 <section class="card verdict">
   <div class="who">

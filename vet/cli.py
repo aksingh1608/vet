@@ -178,6 +178,22 @@ def _save_run(
     return verdicts_path, problems, report
 
 
+def failed_products(records: list[ProductRecord]) -> list[ProductRecord]:
+    return [r for r in records if r.buyer is not None and r.buyer.method == "failed"]
+
+
+def _print_failures(records: list[ProductRecord]) -> None:
+    """Say how many products failed, and which: a caught failure must never be silent."""
+    failed = failed_products(records)
+    if not failed:
+        console.print(f"0 of {len(records)} products failed")
+        return
+    console.print(f"[red]✗ {len(failed)} of {len(records)} products failed[/red]")
+    for r in failed:
+        who = (r.input.id + " " if r.input and r.input.id else "") + r.verdict.product_url
+        console.print(f"  ✗ {who}: {'; '.join(r.errors)[:200]}", markup=False)
+
+
 def _print_problems(problems: list[str], started: float) -> None:
     if problems:
         for problem in problems:
@@ -250,6 +266,7 @@ def run(
         problems += validate_stackgini_file(verdicts_path, settings, targets)
 
     console.print(_summary_table(f"run {run_id}", records))
+    _print_failures(records)
     console.print(f"verdicts: {verdicts_path}")
     console.print(f"report:   {report[-1]}")
     _print_problems(sorted(set(problems)), started)
@@ -429,6 +446,7 @@ def eval_(
     result = score(records, labelled)
     path = write_eval(run_dir, result, [str(f) for f in files])
     console.print(_summary_table(f"eval {run_id}", records))
+    _print_failures(records)
     for axis in (result.real_alive, result.trust):
         if axis.total:
             console.print(f"{axis.axis}: {axis.correct}/{axis.total} ({axis.accuracy:.0%})")

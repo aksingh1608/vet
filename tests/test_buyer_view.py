@@ -225,3 +225,65 @@ def test_old_record_without_buyer_view_gets_the_baseline_row(tmp_path, stackgini
     )
     path = write_run(tmp_path, [record], [], stackgini)
     assert validate_stackgini_file(path, stackgini) == []
+
+
+def test_report_shows_the_traffic_light_first(tmp_path, stackgini) -> None:
+    from vet.report import render
+
+    record = ok_record(InputRow(url="https://shown.example/", id="5"))
+    write_run(tmp_path / "run", [record], [], stackgini)
+    pages = render(tmp_path / "run", tmp_path / "out")
+    html = pages[0].read_text(encoding="utf-8")
+    assert html.index("Buyer action") < html.index("Real &amp; alive")
+
+
+def test_a_failed_product_is_visible_everywhere(tmp_path, stackgini, monkeypatch, caplog):
+    """The per-product catch stays (batch survival), but the failure is never silent: ERROR log
+    with the exception type, a trace event, the record's errors, the buyer reasoning and the
+    CLI summary all show it."""
+    import logging
+
+    from rich.console import Console
+    from typer.testing import CliRunner
+
+    from vet import cli
+
+    async def fake_run_product(url, deps, row=None):  # noqa: ANN001
+        if "broken" in url:
+            raise KeyError("judge exploded")
+        return ok_record(row), trace.Trace(product_url=url)
+
+    monkeypatch.setattr(orchestrator, "run_product", fake_run_product)
+    monkeypatch.setattr(orchestrator, "LLM", lambda settings, cache=None: FakeLLM())
+    local = stackgini.model_copy(update={"runs_dir": tmp_path / "runs"})
+    monkeypatch.setattr(cli, "_settings", lambda advanced, fmt: local)
+    console = Console(record=True, width=200, color_system=None)
+    monkeypatch.setattr(cli, "console", console)
+    inputs = tmp_path / "in.csv"
+    inputs.write_text(
+        "id,url\n1,https://fine-books.example/\n2,https://broken-crm.example/\n", encoding="utf-8"
+    )
+
+    with caplog.at_level(logging.ERROR, logger="vet.orchestrator"):
+        result = CliRunner().invoke(cli.app, ["run", "--file", str(inputs)])
+    assert result.exit_code == 0, result.output
+
+    errors = [r for r in caplog.records if r.levelno == logging.ERROR]
+    assert any("broken-crm" in r.getMessage() and "KeyError" in r.getMessage() for r in errors)
+    shown = console.export_text()
+    assert "1 of 2 products failed" in shown and "broken-crm.example" in shown
+
+    (run_dir,) = (tmp_path / "runs").iterdir()
+    failed = next(r for r in load_records(run_dir) if r.input.id == "2")
+    assert failed.errors and failed.errors[0].startswith("run: KeyError")
+    assert "run failed: KeyError" in failed.buyer.reasoning
+    trace_text = (run_dir / "trace.jsonl").read_text(encoding="utf-8")
+    assert '"event": "product_failed"' in trace_text and "KeyError" in trace_text
+
+
+def test_buyer_only_collectors_run_only_with_the_categoriser(settings) -> None:
+    assert not settings.buyer_categorise  # the baseline mapping ships by default
+    assert "corporate" not in orchestrator.collectors_after_site(settings)
+    on = settings.model_copy(update={"buyer_categorise": True})
+    assert "corporate" in orchestrator.collectors_after_site(on)
+    assert "identity" in orchestrator.collectors_after_site(settings)

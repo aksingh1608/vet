@@ -98,6 +98,10 @@ send email, or run code it fetched.
 
 ## Residual risks
 
+- The fetcher does not yet reject private or local network addresses on redirects (a vendor page
+  could redirect to 127.0.0.1 or an internal host), and it does not cap response size. This is
+  the first fix after the event.
+
 - Pattern-based detection misses paraphrased instructions that do not address an AI or an
   evaluator directly. Those still reach the model, but only inside `<untrusted_content>`, and the
   model can only choose labels the rules allow and cite fact ids that exist.
