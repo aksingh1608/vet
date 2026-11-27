@@ -139,3 +139,46 @@ class Verdict(_Model):
     git_sha: str
     model: str
     created_at: datetime
+
+
+# --- Buyer view: one traffic light per product (the organiser's scoring) -------------------
+
+
+class Overall(StrEnum):
+    GREEN = "green"
+    YELLOW = "yellow"
+    RED = "red"
+
+
+class FlagColour(StrEnum):
+    GREEN = "green"
+    YELLOW = "yellow"
+    RED = "red"
+
+
+class Flag(_Model):
+    """One observation for the buyer, built only from a verified fact, with its link."""
+
+    text: str
+    colour: FlagColour
+    source_url: str
+    source_type: str = ""
+    category: str = ""
+    fact_id: str = ""
+    decisive: bool = False
+
+
+class BuyerVerdict(_Model):
+    """The buyer-view row for one input. Recomputed from facts; never inherits the two axes."""
+
+    input_id: str = ""
+    url: str
+    product: str = ""
+    vendor: str = ""
+    overall: Overall
+    action: str
+    categories: list[str] = Field(default_factory=list)
+    flags: list[Flag] = Field(default_factory=list)
+    reasoning: str
+    method: Literal["baseline", "categorised", "failed"] = "baseline"
+    not_checked: list[str] = Field(default_factory=list)

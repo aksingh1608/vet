@@ -14,9 +14,10 @@ import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from vet.buyer_view import flag_cell
 from vet.labels import Label
 from vet.output import ProductRecord
-from vet.schemas import RealAlive, SourceKind, Trust
+from vet.schemas import FlagColour, Overall, RealAlive, SourceKind, Trust
 from vet.text import registered_domain
 
 logger = logging.getLogger(__name__)
@@ -52,11 +53,40 @@ class AxisScore:
 
 
 @dataclass
+class OverallMiss:
+    input_id: str
+    product: str
+    ours: str
+    theirs: str
+    method: str
+    our_flags: dict[str, str]
+    their_flags: dict[str, str]
+    our_categories: list[str]
+    seconds: float
+
+
+@dataclass
 class EvalResult:
     real_alive: AxisScore
     trust: AxisScore
     misses: list[Miss]
     unmatched: list[str]  # labelled products with no record
+    overall: AxisScore = field(
+        default_factory=lambda: AxisScore("overall", [v.value for v in Overall])
+    )
+    overall_misses: list[OverallMiss] = field(default_factory=list)
+
+    def overall_stat(self, theirs: str, ours: str) -> int:
+        return self.overall.confusion.get((theirs, ours), 0)
+
+    @property
+    def red_recall(self) -> str:
+        reds = sum(self.overall_stat("red", o) for o in self.overall.labels)
+        return f"{self.overall_stat('red', 'red')}/{reds}"
+
+    @property
+    def false_reds(self) -> int:
+        return sum(self.overall_stat(t, "red") for t in self.overall.labels if t != "red")
 
 
 def match_key(url: str) -> str:
@@ -82,18 +112,49 @@ def suspected_cause(record: ProductRecord, axis: str, theirs: str) -> str:
     return "wrong weight: evidence found but weighed differently"
 
 
+def _record_for(
+    label: Label, by_id: dict[str, ProductRecord], by_key: dict[str, ProductRecord]
+) -> ProductRecord | None:
+    if label.id and label.id in by_id:
+        return by_id[label.id]
+    return by_key.get(match_key(label.url))
+
+
 def score(records: list[ProductRecord], labels: list[Label]) -> EvalResult:
     by_key = {match_key(r.verdict.product_url): r for r in records}
+    by_id = {r.input.id: r for r in records if r.input is not None and r.input.id}
     ra = AxisScore("real_alive", [v.value for v in RealAlive])
     tr = AxisScore("trust", [v.value for v in Trust])
     misses: list[Miss] = []
     unmatched: list[str] = []
+    ov = AxisScore("overall", [v.value for v in Overall])
+    overall_misses: list[OverallMiss] = []
     for label in labels:
-        record = by_key.get(match_key(label.url))
+        record = _record_for(label, by_id, by_key)
         if record is None:
             unmatched.append(label.url)
             continue
         v = record.verdict
+        if label.overall is not None and record.buyer is not None:
+            theirs_o, ours_o = label.overall.value, record.buyer.overall.value
+            ov.total += 1
+            ov.confusion[(theirs_o, ours_o)] = ov.confusion.get((theirs_o, ours_o), 0) + 1
+            if theirs_o == ours_o:
+                ov.correct += 1
+            else:
+                overall_misses.append(
+                    OverallMiss(
+                        input_id=label.id,
+                        product=label.product or v.product_url,
+                        ours=ours_o,
+                        theirs=theirs_o,
+                        method=record.buyer.method,
+                        our_flags={c.value: flag_cell(record.buyer.flags, c) for c in FlagColour},
+                        their_flags=label.flags,
+                        our_categories=record.buyer.categories,
+                        seconds=record.seconds,
+                    )
+                )
         for axis_score, theirs, ours in (
             (ra, label.real_alive, v.real_alive),
             (tr, label.trust, v.trust),
@@ -117,7 +178,27 @@ def score(records: list[ProductRecord], labels: list[Label]) -> EvalResult:
                     cause=suspected_cause(record, axis_score.axis, theirs.value),
                 )
             )
-    return EvalResult(real_alive=ra, trust=tr, misses=misses, unmatched=unmatched)
+    return EvalResult(
+        real_alive=ra,
+        trust=tr,
+        misses=misses,
+        unmatched=unmatched,
+        overall=ov,
+        overall_misses=overall_misses,
+    )
+
+
+def overall_table(result: EvalResult) -> list[str]:
+    """Accuracy, the 3x3 confusion table and the Red figures, as markdown lines."""
+    o = result.overall
+    return [
+        f"overall: {o.correct}/{o.total} ({o.accuracy:.0%})",
+        f"Red recall {result.red_recall}; false Reds {result.false_reds}; "
+        f"Greens called Red {result.overall_stat('green', 'red')}; "
+        f"Reds called Green {result.overall_stat('red', 'green')}",
+        "",
+        *_confusion(o),
+    ]
 
 
 def _cell(text: str) -> str:
@@ -137,6 +218,22 @@ def _confusion(axis: AxisScore) -> list[str]:
 
 def render_markdown(result: EvalResult, run_id: str, label_sources: list[str]) -> str:
     lines = [f"# Eval {run_id}", "", "Labels: " + ", ".join(label_sources), ""]
+    if result.overall.total:
+        lines += ["## Overall (buyer view)", "", *overall_table(result), ""]
+        lines += [
+            "### Overall misses",
+            "",
+            "| Id | Ours | Theirs | Method | Our categories | Our flags | Their flags |",
+            "|---|---|---|---|---|---|---|",
+        ]
+        for m in result.overall_misses:
+            ours = "<br>".join(f"{k}: {v}" for k, v in m.our_flags.items())
+            theirs = "<br>".join(f"{k}: {v}" for k, v in m.their_flags.items())
+            lines.append(
+                f"| {m.input_id} | {m.ours} | {m.theirs} | {m.method} | "
+                f"{_cell(', '.join(m.our_categories))} | {_cell(ours)} | {_cell(theirs)} |"
+            )
+        lines.append("")
     lines += ["## Accuracy", "", "| Axis | Correct | Labelled | Accuracy |", "|---|---|---|---|"]
     for axis in (result.real_alive, result.trust):
         lines.append(f"| {axis.axis} | {axis.correct} | {axis.total} | {axis.accuracy:.0%} |")

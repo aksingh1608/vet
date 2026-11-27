@@ -203,6 +203,12 @@ class LLM:
                     output_format=output,
                     output_config={"effort": EFFORT[kind]},
                 )
+            except (anthropic.APIError, TimeoutError) as exc:
+                # The SDK already retried 408/409/429/5xx/529 with backoff (LLM_MAX_RETRIES).
+                # Surface what is left as LLMError so every caller's fallback runs.
+                logger.warning("%s: API error after retries: %s", step, type(exc).__name__)
+                trace.emit({"event": "llm_api_error", "step": step, "error": type(exc).__name__})
+                raise LLMError(f"{step}: {type(exc).__name__}: {exc}") from exc
             except ValidationError as exc:
                 # The SDK parses the JSON itself; a cut-off answer fails here, before we can
                 # look at stop_reason. Retry once with a larger budget and a shorter answer.

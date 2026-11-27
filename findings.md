@@ -35,6 +35,7 @@ Nothing else goes in this section. DEFENCE.md cites only this section.
 | 2026-11-26 | feat/vet-demo (PR #10) | Norma GitHub App PR check | — | files changed by PR #10 | — | clean | "No issues introduced by your changes." [Report](https://norma.qualityclouds.com/projects/12410) |
 | 2026-11-26 | chore/final-pass (PR #11) | Norma GitHub App PR check | — | files changed by PR #11 | — | clean | "No issues introduced by your changes." (20:41:42Z, after the commit at 20:41:27Z) [Report](https://norma.qualityclouds.com/projects/12410) |
 | 2026-11-26 | fix/evidence-honesty | `live_check` (python, secrets, fastapi, sqlalchemy rulesets) | — | vet/claims_check.py, sources.py, tavily.py, verify.py, report.py; tests/test_claims_check.py, test_tavily.py, test_verify.py, test_report.py | — | clean | 0 issues, full coverage, no policy notices. Changes: claims confirmed only by a record stating the same specific fact; search-tool pages (tavily.com) dropped from Tavily results, rejected by the verifier and hidden from the claims table. |
+| 2026-11-27 | feat/buyer-view | `live_check` (python, secrets, fastapi, sqlalchemy rulesets) | — | 11 changed/new source files: vet/buyer_view.py, output.py, orchestrator.py, cli.py, evaluate.py, labels.py, schemas.py, tavily.py, llm.py, config.py, report.py | — | clean | 0 issues. output.py was rechecked after the old-record fallback was added. Test files (tests/test_buyer_view.py, tests/test_demo.py) are left to the Norma GitHub App check on the PR. |
 
 ## Author conflicts
 

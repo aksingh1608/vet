@@ -9,6 +9,7 @@ organiser's examples are never published).
 """
 
 import csv
+import io
 import json
 import logging
 import re
@@ -18,7 +19,7 @@ from urllib.parse import urlsplit
 
 from jinja2 import Environment, PackageLoader, select_autoescape
 
-from vet.output import ProductRecord, find_verdict_file, load_records, product_slug
+from vet.output import ProductRecord, find_verdict_file, load_records, record_filename
 from vet.schemas import Axis, Fact, Polarity
 from vet.sources import is_search_tool_url
 from vet.text import registered_domain
@@ -129,12 +130,18 @@ def load_run(run_dir: Path) -> list[ProductRecord]:
     if verdicts.exists():
         text = verdicts.read_text(encoding="utf-8")
         if verdicts.suffix == ".csv":
-            order = [r["product_url"] for r in csv.DictReader(text.splitlines())]
+            rows = csv.DictReader(io.StringIO(text, newline=""))
+            order = [r.get("product_url") or r.get("url") or "" for r in rows]
         else:
             order = [v.get("product_url", "") for v in json.loads(text)]
     records = load_records(run_dir)
     rank = {url: i for i, url in enumerate(order)}
-    return sorted(records, key=lambda r: rank.get(r.verdict.product_url, len(rank)))
+
+    def position(r: ProductRecord) -> int:
+        buyer_url = r.buyer.url if r.buyer is not None else ""
+        return rank.get(r.verdict.product_url, rank.get(buyer_url, len(rank)))
+
+    return sorted(records, key=position)
 
 
 def labelled_domains(labelled_dir: Path = LABELLED_DIR) -> set[str]:
@@ -173,7 +180,7 @@ def render(
     written: list[Path] = []
     pages = []
     for record in records:
-        slug = product_slug(record.verdict.product_url)
+        slug = record_filename(record).removesuffix(".json")
         facts = {f.id: f for f in record.facts}
         checks = {c.fact_id: c for c in record.verification}
         path = out_dir / f"{slug}.html"
