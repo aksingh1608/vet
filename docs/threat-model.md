@@ -54,9 +54,9 @@ flowchart LR
 | B2 | Page HTML → LLM prompt | Page text | `guard.py` removes CSS-hidden elements, comments and attribute values with a hit, then drops every paragraph that addresses AI systems. What is left goes inside `<untrusted_content>` tags; any such tag in the content is escaped so it cannot close the block. Every system prompt says the block is data, never instructions. |
 | B3 | Search snippets → LLM prompt | Tavily result title and content | Same scrub and tag wrapping as B2. |
 | B4 | LLM output → verdict | Labels, fact ids, short sentences | The judge returns labels and **fact ids**, not sources. Labels are clamped to what the code rules allow. Reasons and findings are built in code from facts; ids not in the fact list are dropped. Extracted quotes must appear verbatim on the page they cite. |
-| B5 | Facts → shipped reasons | Statements with links | Every reason and finding is re-checked: quote on the page or in the machine record (`check_url`), or in the cached snippet for snippet-only domains; a model check that the quote supports the sentence; facts built on records pass only if those records pass. |
+| B5 | Facts → shipped reasons | Statements with links | Every reason and finding is re-checked: quote on the page or in the machine record (`check_url`), or in the cached snippet for snippet-only domains; for a page that answers 403/429, the quote may be verified from the cached search snippet of that URL, and every such flag is marked "snippet-verified; page blocks automated access" in the output; a model check that the quote supports the sentence; facts built on records pass only if those records pass. |
 | B6 | Run output → report / public site | Verdicts, quotes, links | Jinja2 autoescaping; only `http(s)` links are rendered (`javascript:` becomes `#`); `vet report --public` refuses runs that include any product listed under `data/labelled/`. |
-| B7 | Secrets → anything else | API keys | Keys only from `.env` as `SecretStr`; sent only in headers; never in URLs, bodies, cache keys, cache rows, logs or traces. |
+| B7 | Secrets → anything else | API keys, GitHub token | Keys only from `.env` as `SecretStr`; sent only in headers; never in URLs, bodies, cache keys, cache rows, logs or traces. `GITHUB_TOKEN` (optional) is sent only to `api.github.com` (`tests/test_fetch.py`). |
 
 ## Capabilities
 
@@ -65,7 +65,7 @@ send email, or run code it fetched.
 
 | Component | Network | LLM | Writes | Can change the verdict by |
 |---|---|---|---|---|
-| `fetch.py` | GET to any host except snippet-only ones; POST to Tavily only | no | SQLite cache | nothing (transport only) |
+| `fetch.py` | GET to any host except snippet-only ones; POST to Tavily only; the GitHub token only to `api.github.com` | no | SQLite cache (responses only, never request headers) | nothing (transport only) |
 | `guard.py` | no | no | no | adding hard-flag NEGATIVE trust facts |
 | `site_reader` | via fetch | fast model, sanitized text | no | claims (never positive evidence); copyright and missing-page facts (negative or neutral only) |
 | `age` | RDAP, crt.sh, Wayback via fetch | no | no | record facts with dates |
@@ -77,7 +77,7 @@ send email, or run code it fetched.
 | `claims_check` | no | no | no | founding-year gap (negative) or contradiction (hard flag) |
 | judge rules | no | no | no | allowed labels, trust floor, caps from hard flags |
 | LLM judge | no | judge model | no | label within the allowed set; ranking of fact ids |
-| `verify.py` | via fetch (cache first) | fast model support check | no | dropping unverified reasons and findings |
+| `verify.py` | via fetch (cache first) | fast model support check | no | dropping unverified reasons and findings; a page that answers 403/429 may be verified from the cached search snippet, and the flag is then marked "snippet-verified; page blocks automated access" |
 | `output.py` / `report.py` | no | no | `runs/`, `site/` | nothing |
 
 ## Threats and mitigations
@@ -110,3 +110,7 @@ send email, or run code it fetched.
   PR wires as not independent and directory listings as filler, but a well-made fake review site
   could pass.
 - Snippet-only domains are trusted as far as Tavily's snippet is accurate.
+- Pages that block automated access (403/429) are verified from the cached search snippet, so
+  they are trusted as far as that snippet is accurate (119 of 876 flags in the runs of 27 Nov).
+  Each such flag is marked "snippet-verified; page blocks automated access". Fix after the
+  event: verify these pages through an archive copy.
