@@ -22,6 +22,30 @@ light (Green, Yellow or Red) with sourced flags and a short reasoning.**
 >   4 products in parallel.
 > - **One command:** `uv run vet run --file input.csv --advanced --format stackgini`
 
+## How to read stackgini-verdicts.csv
+
+`stackgini-verdicts.csv` (repo root) holds the blind-round verdicts, exactly as `vet` wrote them.
+It is UTF-8 CSV with one row per input product, in input order.
+
+| Column | Content |
+|---|---|
+| `id`, `url`, `product`, `vendor` | Copied from the organiser's input |
+| `overall` | `Green`, `Yellow` or `Red` |
+| `green_flags`, `yellow_flags`, `red_flags` | Flags separated by ` \| `; `None identified.` when there are none |
+| `reasoning` | A short summary of the call, then the buyer action |
+
+**Flags:**
+- Each flag is one sentence, ending with its source type and link: `… (press: https://…)`.
+- A flag whose page refuses automated access (HTTP 403/429) was verified from the cached search
+  snippet. It ends `(<type>, snippet-verified; page blocks automated access: https://…)`.
+- Every flag comes from a verified fact. The writer drops any flag without an openable http(s)
+  link.
+
+**Reasoning:**
+- The summary itself contains no links; every source is in the flags.
+- If pages could not be read, the reasoning ends with `Not checked: …`. That clause names those
+  pages and why, and it can contain their URLs.
+
 ## For Stackgini judges
 
 ### Why this approach is different
