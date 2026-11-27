@@ -3,6 +3,13 @@
 **vet checks a software vendor's claims against independent records and gives a buyer one traffic
 light (Green, Yellow or Red) with sourced flags and a short reasoning.**
 
+## Two challenges, one repo
+
+| Challenge | What is judged | Where to look |
+|---|---|---|
+| **Stackgini "Agents with Taste"** | The calls (Green / Yellow / Red), the reasons and their links | [For Stackgini judges](#for-stackgini-judges): why the approach is different → measured results |
+| **Norma "Ship agent code your team can defend"** | Team policy and consistency, the accepted tradeoff, findings fixed, Production-Ready Score | [For Norma judges](#for-norma-judges), [DEFENCE.md](DEFENCE.md) |
+
 > **In 60 seconds**
 > - **What:** give vet product URLs. For each one it reads the vendor site as *claims*, then
 >   collects *evidence* from records and independent sources, verifies every cited source, and
@@ -15,7 +22,9 @@ light (Green, Yellow or Red) with sourced flags and a short reasoning.**
 >   4 products in parallel.
 > - **One command:** `uv run vet run --file input.csv --advanced --format stackgini`
 
-## Why this approach is different
+## For Stackgini judges
+
+### Why this approach is different
 
 | Choice | Where in the code |
 |---|---|
@@ -25,7 +34,7 @@ light (Green, Yellow or Red) with sourced flags and a short reasoning.**
 | **Page text is hostile input.** Hidden text and text addressed to AI are removed before any model sees a page, and the attempt itself becomes a red flag. | `vet/guard.py`, `tests/fixtures/redteam/` |
 | **Honest measurement.** Baseline vs categoriser, a holdout, and live rehearsals on unseen products. We kept the categoriser **off** because the live rehearsal failed it. | `docs/pitch-notes.md` |
 
-## Input → output
+### Input → output
 
 Input (`docs/examples/input.csv`) and the verdict file `vet` wrote for it
 (`docs/examples/output.csv`, the exact blind-round command, 27 Nov):
@@ -50,7 +59,7 @@ view maps it to Red.
 
 ![Report for the synthetic hollow vendor: not real, do not trust](docs/img/hollow-scenario.png)
 
-## How it works
+### How it works
 
 ```mermaid
 flowchart LR
@@ -80,7 +89,7 @@ flowchart LR
 
 `corporate` runs only when the categoriser is on (`VET_BUYER_CATEGORISE=true`, off by default).
 
-## What we check
+### What we check
 
 | Signal family | Collector | Source type |
 |---|---|---|
@@ -98,7 +107,7 @@ flowchart LR
 
 Breach data: [Have I Been Pwned](https://haveibeenpwned.com).
 
-## AI security layer
+### AI security layer
 
 Full model: [docs/threat-model.md](docs/threat-model.md).
 
@@ -132,7 +141,7 @@ Full model: [docs/threat-model.md](docs/threat-model.md).
 - **No secrets in logs.** Keys come only from `.env`, are sent only in headers, and never appear
   in URLs, cache keys, logs or traces.
 
-## Measured results
+### Measured results
 
 The organiser sent 40 labelled products. We score agreement on the single traffic light; the
 labelled data never leaves this machine. Basic search depth; the baseline (what ships) maps the
@@ -161,30 +170,75 @@ took **134 s** (our limit is 120 s). So the blind round uses the baseline.
 0 failed products across all of 27 Nov's runs. If one fails, the batch keeps going and that row
 says "run failed: ...".
 
-## Norma governance
+## For Norma judges
 
-- **Two team policies** in the Norma workspace "Vet":
-  - **"No second HTTP client, no browser automation"** (banned packages, High): bans `requests`,
-    `aiohttp`, `playwright` and `selenium`. Every network call goes through `vet/fetch.py`, which
-    enforces robots.txt, rate limits and the cache. vet is read-only and never renders pages,
-    fills forms or logs in. `requests` and `aiohttp` came from Saurabh's review.
-  - **"Permissive licences only"** (licence, Medium): MIT, BSD-2/3-Clause, Apache-2.0, PSF-2.0, ISC.
-    Dry run: 0 violations.
-- **A policy finding, fixed: score 96 → 100 (PR #21).** The banned-packages policy flagged an
-  unused optional extra (`playwright`) in `pyproject.toml`. No code imported it; we removed it
-  and refreshed `uv.lock`.
-- **An accepted tradeoff.** Norma's `error-handling-layer-1.0` flagged the per-product catch in
-  `vet/orchestrator.py`. We keep it, because one failed product must never stop the batch. The
-  failure is surfaced instead, in five places: ERROR log, trace, record errors, the row's
-  reasoning, and "N of M products failed" in the CLI. A test covers it.
-- **An author conflict.** Both authors registered new collectors in the same lines of
-  `orchestrator.py`. Each merge kept all of them, and each conflict is logged.
-- **Both coding agents connected to Norma via MCP**; `.mcp.json` connects every agent that opens
-  the repo (URL only, no token). The Norma GitHub check ran on every PR; the `live_check` results
-  before commits are logged in findings.md.
-- **Merged PRs:** Aryan Kumar Singh 17, Saurabh Kumar 4.
+In Norma's scoring order. Full record: [DEFENCE.md](DEFENCE.md) and [findings.md](findings.md).
 
-Details: [DEFENCE.md](DEFENCE.md), [findings.md](findings.md), [docs/norma-policy.md](docs/norma-policy.md).
+### 1. Team policy and consistency (30)
+
+Two organisation policies in the Norma workspace "Vet", checked on every dependency manifest and
+lockfile. Details and the rule-level policy: [docs/norma-policy.md](docs/norma-policy.md).
+
+| Policy | Rule id | Severity | Why | Proposed by |
+|---|---|---|---|---|
+| No second HTTP client, no browser automation (banned: `requests`, `aiohttp`, `playwright`, `selenium`) | `policy-banned-deps-a5f2-1.0` | High | Every network call goes through `vet/fetch.py`, which enforces robots.txt, rate limits and the cache. vet is read-only and never renders pages, fills forms or logs in. | Saurabh: `requests`, `aiohttp`. Both: browser automation |
+| Permissive licences only (MIT, BSD-2/3-Clause, Apache-2.0, PSF-2.0, ISC) | `policy-licence-a9e3-1.0` | Medium | No licence obligations we cannot review. Dry run: 0 violations. | Both |
+
+Consistency between the two authors: both agents worked against the same rules. The one place
+the authors' code differs (whether a collector's facts reach the two-axis judge) is recorded in
+[DEFENCE.md](DEFENCE.md#policy-and-consistency).
+
+### 2. The tradeoff we accepted (30)
+
+- **Finding:** `error-handling-layer-1.0` (High), "A failure is caught and nobody ever finds out",
+  in `vet/orchestrator.py` (`run_product_safe`).
+- **Why we keep the catch:** one failed product must never stop the batch. A blind round must
+  return one row per input.
+- **How a failure stays visible:** in five places, all checked by
+  `test_a_failed_product_is_visible_everywhere`:
+  1. an ERROR log line with the exception type;
+  2. a `product_failed` trace event;
+  3. the record's errors;
+  4. the row's reasoning ("run failed: ...");
+  5. "N of M products failed" in the CLI summary.
+- Record: [DEFENCE.md, Accepted](DEFENCE.md#accepted), [findings.md](findings.md).
+
+### 3. Found and fixed (20)
+
+- **Our own policy caught a real dependency:** the banned-packages policy flagged an unused
+  optional extra `browser = ["playwright>=1.45"]` in `pyproject.toml` (score 96, 1 High).
+  - No code imported it.
+  - We removed it and refreshed `uv.lock` in PR #21; the score went from 96 to 100.
+- **Earlier findings from `live_check`, all fixed** ([findings.md](findings.md)):
+
+| Rule | File | Severity |
+|---|---|---|
+| `py-maint-else-after-return` | `vet/collectors/classify.py` | High |
+| `fa-mnt-no-typing-param` | `vet/config.py` | Medium |
+| `py-mng-open-no-encoding` | `vet/report.py` | Low |
+| `py-perf-double-lookup` | `vet/verify.py` | Low |
+
+### 4. Production-Ready Score (20)
+
+100/100 (Gold) on `main`.
+
+### Required items
+
+- [x] **01. Both agents connected to Norma through MCP.** Both authors' Claude Code sessions
+  were connected to the Norma MCP server, and `.mcp.json` connects every agent that opens the
+  repo (URL only, no token). The `live_check` results are logged in [findings.md](findings.md).
+- [x] **02. Pull requests per author.**
+  - Aryan Kumar Singh: #1–9, #11–13, #16, #17, #19–24, and this README PR.
+  - Saurabh Kumar: #10, #14, #15, #18.
+  - The Norma GitHub check ran on every PR.
+- [x] **03. A fix:** PR #21 (playwright extra, policy score 96 → 100); also the four rule
+  findings above.
+- [x] **04. A policy:** the two policies above, written down in
+  [docs/norma-policy.md](docs/norma-policy.md).
+- **Author conflict:** both authors registered new collectors in the same lines of
+  `vet/orchestrator.py`; each merge kept all of them. See
+  [findings.md, Author conflicts](findings.md#author-conflicts) and
+  [DEFENCE.md](DEFENCE.md#conflict-between-authors).
 
 ## Quickstart
 
