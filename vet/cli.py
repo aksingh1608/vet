@@ -380,6 +380,21 @@ def report(
     console.print(f"[green]✓[/green] wrote {len(written)} pages to {SITE_DIR}/")
 
 
+@app.command()
+def overview(
+    run_dir: Annotated[Path, typer.Argument(help="Path to runs/<id>.")],
+) -> None:
+    """Write a one-page batch overview to RUN_DIR/report/overview.html (local, never published)."""
+    from vet.overview import render_overview
+
+    try:
+        path = render_overview(run_dir, Settings.from_env())
+    except (FileNotFoundError, ValueError) as exc:
+        console.print(f"[red]✗[/red] {exc}")
+        raise typer.Exit(code=1) from exc
+    console.print(f"[green]✓[/green] wrote {path}")
+
+
 @app.command("eval")
 def eval_(
     labels: Annotated[

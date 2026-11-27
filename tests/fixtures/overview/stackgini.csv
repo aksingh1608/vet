@@ -1,0 +1,4 @@
+id,url,product,vendor,overall,green_flags,yellow_flags,red_flags,reasoning
+P1,https://larkspur-notes.example/,Larkspur Notes,Larkspur Labs,Green,Domain registered 2009-03-14. (record: https://lookup.icann.org/en/lookup?name=larkspur-notes.example) | Listed on Companies House as active. (record: https://find-and-update.company-information.service.gov.uk/company/01234567),None identified.,None identified.,Long history and an active register record.
+P2,https://quillmoor.example/,Quillmoor CRM,Quillmoor GmbH,Yellow,None identified.,<script>alert(1)</script> Claims 50000 users on one page and 10000 on another. (vendor: https://quillmoor.example/about),None identified.,Inconsistent traction figures.
+P3,javascript:alert(2),Brackenfold,Brackenfold Ltd,Red,None identified.,None identified.,Have I Been Pwned lists a breach dated 2025-02-01. (record: javascript:alert(3)),Recent undisclosed breach.
