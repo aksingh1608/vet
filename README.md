@@ -269,8 +269,10 @@ procedure is in [RUNBOOK.md](RUNBOOK.md).
   not blocked yet, and response size is not capped.
 - **Categoriser:** fix the two false-Red patterns the rehearsal exposed (a third party ending its
   own service; an old major version's end of life), then re-measure on unseen products.
-- **A known false flag:** in one example run a changelog's newest date was misread. That row was
-  removed from the examples, and the fix is next.
+- **A false flag found and fixed:** in one example run, the newest date on a changelog was misread,
+  because main-text extraction had dropped the dated headings. Dates are now read from the whole
+  page with hidden text removed (`vet/collectors/alive.py`, with tests). That example row was not
+  published.
 
 ## Team
 

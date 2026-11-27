@@ -23,10 +23,11 @@ from datetime import UTC, datetime, timedelta
 from urllib.parse import quote as urlquote
 from urllib.parse import urlsplit
 
+from vet import guard
 from vet.collectors.base import Context, SitePage, fact_id
 from vet.fetch import FetchError
 from vet.schemas import Axis, Fact, Polarity, SourceKind
-from vet.text import extract_links, normalize
+from vet.text import extract_links, html_to_text, normalize
 
 logger = logging.getLogger(__name__)
 
@@ -122,12 +123,24 @@ def _recency(days: int) -> tuple[Polarity, float, str]:
     return Polarity.NEUTRAL, 0.1, "release_activity"
 
 
+def dated_text(page: SitePage) -> str:
+    """Text to read dates from: the whole visible page, not the LLM's main-text extraction.
+
+    Main-text extraction can drop the dated headings of a changelog and keep an old date from
+    an entry body, so the newest date would be wrong. Hidden elements are removed first
+    (guard.sanitize_html), so a date planted in hidden text cannot fake freshness. An archived
+    copy keeps the main text: the archive's own toolbar carries capture dates."""
+    if not page.raw or page.archived:
+        return page.text
+    return html_to_text(guard.sanitize_html(page.raw))
+
+
 def page_date_facts(pages: list[SitePage], today: datetime) -> list[Fact]:
     facts: list[Fact] = []
     for page in pages:
         if page.kind not in DATED_PAGE_KINDS or not page.text:
             continue
-        dates = find_dates(page.text, today)
+        dates = find_dates(dated_text(page), today)
         if not dates:
             continue
         latest, written = max(dates)
