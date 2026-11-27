@@ -112,6 +112,9 @@ Sources: the repo, the tests, `runs/`, `findings.md` and the commit history. Not
   - The report's claims table hides them.
 
 ## Known limits (named, not built)
+- Pages that refuse automated access (403/429) are verified from the cached search snippet, and
+  the flag is marked "snippet-verified; page blocks automated access": 119 of 876 flags in the
+  runs of 27 Nov. Planned fix: verify these pages through an archive copy.
 - Not detected today: a copied imprint, shelf companies, virtual-office addresses, founder
   history, bought reviews, review blogs owned by the vendor.
 - No certification registers are queried: a SOC 2 or ISO badge is reported as a claim, never as

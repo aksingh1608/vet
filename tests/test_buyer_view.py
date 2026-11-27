@@ -299,3 +299,48 @@ async def test_vet_credits_never_reads_usage_from_the_cache(router_fetcher) -> N
         assert await tavily.usage() == (5, 9)
         assert await tavily.usage() == (5, 9)
     assert len([r for r in rec.requests if r.url.path == "/usage"]) == 2  # both went out
+
+
+def test_snippet_verified_flag_says_so_and_snippet_only_domains_do_not() -> None:
+    from vet.buyer_view import SNIPPET_VERIFIED_NOTE, mark_snippet_verified, render_flag
+    from vet.schemas import BuyerVerdict, Flag, FlagColour
+
+    blocked = Flag(
+        text="Acme Tools was fined in 2025",
+        colour=FlagColour.YELLOW,
+        source_url="https://news.example-press.com/acme",
+        source_type="independent press",
+        fact_id="risk-10",
+    )
+    snippet_only = Flag(
+        text="G2 lists 40 reviews of Acme Tools",
+        colour=FlagColour.GREEN,
+        source_url="https://www.g2.com/products/acme-tools/reviews",
+        source_type="review",
+        fact_id="footprint-3",
+    )
+    buyer = BuyerVerdict(
+        url="https://acme-tools.example/",
+        overall="yellow",
+        action="hold for one named check",
+        flags=[blocked, snippet_only],
+        reasoning="Yellow.",
+    )
+    marked = mark_snippet_verified(buyer, {"risk-10"})  # only the refused page was snippet-sourced
+    assert render_flag(marked.flags[0]) == (
+        "Acme Tools was fined in 2025. (independent press, "
+        f"{SNIPPET_VERIFIED_NOTE}: https://news.example-press.com/acme)"
+    )
+    assert render_flag(marked.flags[1]) == (
+        "G2 lists 40 reviews of Acme Tools. (review: https://www.g2.com/products/acme-tools/reviews)"
+    )
+    assert marked.overall == buyer.overall  # text only: the label never changes
+
+
+def test_snippet_verified_flag_still_validates(tmp_path, stackgini) -> None:
+    rec = ok_record(InputRow(url="https://blocked-news.example/", id="s1"))
+    flags = [f.model_copy(update={"snippet_verified": True}) for f in rec.buyer.flags]
+    rec = rec.model_copy(update={"buyer": rec.buyer.model_copy(update={"flags": flags})})
+    path = write_run(tmp_path, [rec], [], stackgini)
+    assert "snippet-verified; page blocks automated access" in path.read_text(encoding="utf-8")
+    assert validate_stackgini_file(path, stackgini) == []

@@ -16,7 +16,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from vet import trace
-from vet.buyer_view import baseline_view, failed_view
+from vet.buyer_view import baseline_view, failed_view, mark_snippet_verified
 from vet.categorise import categorised_view
 from vet.claims_check import check_claims
 from vet.collectors import (
@@ -271,6 +271,7 @@ async def run_product(
             logger.warning("categoriser failed for %s; baseline view kept: %s", url, exc)
             buyer_notes = [f"categoriser failed ({type(exc).__name__}); baseline mapping used"]
         t.emit({"event": "buyer_view", "overall": buyer.overall.value, "notes": buyer_notes})
+    buyer = mark_snippet_verified(buyer, {c.fact_id for c in checks if c.snippet_sourced})
     seconds = round(time.monotonic() - started, 1)  # including the buyer view
     record = ProductRecord(
         verdict=verdict,
